@@ -1,0 +1,24 @@
+{
+    "files.associations": {
+        "*.query": "cpp",
+        "assert.h": "c",
+        "math.h": "c",
+        "stdint.h": "c",
+        "stdbool.h": "c",
+        "stdio.h": "c",
+        "stdlib.h": "c",
+        "string.h": "c",
+        "fnv.h": "c",
+        "hashtable.h": "c",
+        "ir.h": "c",
+        "type.h": "c",
+        "optional": "c",
+        "istream": "c",
+        "ostream": "c",
+        "system_error": "c",
+        "array": "c",
+        "tuple": "c",
+        "type_traits": "c",
+        "utility": "c"
+    }
+}
