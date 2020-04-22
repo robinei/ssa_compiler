@@ -12,7 +12,9 @@ typedef uint32_t Type;
 enum {
     TYPE_NONE,
 
+    TYPE_UNIT,
     TYPE_PAIR, // only used for compile-time IR pairs, to chain instruction operands.
+    TYPE_TYPE,
     
     TYPE_BOOL,
     TYPE_I8,
@@ -62,7 +64,9 @@ enum {
 typedef enum {
     TK_NONE,
 
+    TK_UNIT,
     TK_PAIR,
+    TK_TYPE,
     
     TK_BOOL,
     TK_INT,

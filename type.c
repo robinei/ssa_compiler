@@ -249,7 +249,9 @@ void init_types(void) {
     type_infos_size = TYPE_PREDEFINED_COUNT;
     type_infos_capacity = 128;
     type_infos = malloc(sizeof(TypeInfo) * type_infos_capacity);
+    type_infos[TYPE_UNIT].kind = TK_UNIT;
     type_infos[TYPE_PAIR].kind = TK_PAIR;
+    type_infos[TYPE_TYPE].kind = TK_TYPE;
     init_primitive_type(TYPE_BOOL, TK_BOOL, sizeof(bool));
     init_primitive_type(TYPE_I8, TK_INT, sizeof(int8_t));
     init_primitive_type(TYPE_I16, TK_INT, sizeof(int16_t));

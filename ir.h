@@ -1,8 +1,6 @@
 #pragma once
 
-#include <assert.h>
-#include <stdint.h>
-#include <stdbool.h>
+#include "type.h"
 
 typedef enum {
     OP_NOP,     // does nothing. useful for removing instructions without moving any. stripped before the end.
@@ -10,7 +8,7 @@ typedef enum {
     OP_SLOC,    // source location. left is row, right is column.
     OP_JUMP,    // right is target block id. jumps unconditionally.
     OP_JFALSE,  // left is condition, right is target block id. jumps if condition is false.
-    OP_RET,     // return from current function.
+    OP_RET,     // left is return value. return from current function.
     OP_COPY,    // left register is copied to right. has no result. not used in SSA form.
     
     // all instructions not having a result must come before PHI!
@@ -30,6 +28,7 @@ typedef enum {
     OP_PAIR,
     
     OP_CALL,    // left is function id. right is a single argument or an argument list: pair(a, pair(b, c)) etc.
+    OP_ARG,     // left is argument position. returns function argument.
 
     // unary operators take an UnaryOp operator in left, and a single operand in right, and output the same type.
     OP_UNOP,
@@ -79,6 +78,8 @@ typedef enum {
 #define OP_IS_NUM_BINOP(opcode) ((opcode) >= OP_ADD)
 #define OP_IS_BOOL_BINOP(opcode) ((opcode) >= OP_AND && (opcode) <= OP_OR)
 #define OP_IS_CMP_BINOP(opcode) ((opcode) >= OP_EQ && (opcode) <= OP_LTEQ)
+#define OP_IS_RELCMP_BINOP(opcode) ((opcode) >= OP_GT && (opcode) <= OP_LTEQ)
+#define OP_IS_EQCMP_BINOP(opcode) ((opcode) >= OP_EQ && (opcode) <= OP_NEQ)
 #define OP_IS_REAL_BINOP(opcode) ((opcode) >= OP_POW && (opcode) <= OP_POW)
 #define OP_IS_INT_BINOP(opcode) ((opcode) >= OP_MOD && (opcode) <= OP_BSHR)
 
@@ -109,6 +110,7 @@ typedef enum {
     OPERAND_BLOCK,
     OPERAND_UNOP,
     OPERAND_FUNC,
+    OPERAND_ARGPOS,
     OPERAND_ROW,
     OPERAND_COL,
 } OperandType;
@@ -123,10 +125,11 @@ extern const OpCodeInfo opcode_info[OPCODE_COUNT];
 
 bool is_result_reusable(OpCode opcode);
 
-
 typedef int32_t IRRef;
 #define IRREF_NONE -1
-#define IRREF_FALSE -2
-#define IRREF_TRUE -3
+#define IRREF_UNIT -2
+#define IRREF_FALSE -3
+#define IRREF_TRUE -4
 
 #define IRREF_IS_STATIC(ref) ((ref) < 0)
+

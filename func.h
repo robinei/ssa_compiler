@@ -7,6 +7,7 @@ typedef int32_t Block;
 #define BLOCK_NONE 0
 
 typedef union {
+    Type t;
     bool b;
     int64_t i;
     uint64_t u;
@@ -56,6 +57,7 @@ Func *func_new();
 
 Block create_block(Func *f, Block idom_block);
 
+IRRef get_static_type(Func *f, Type type);
 IRRef get_static_bool(Func *f, bool v);
 IRRef get_static_i8(Func *f, int8_t v);
 IRRef get_static_i16(Func *f, int16_t v);
@@ -75,7 +77,8 @@ void emit_jump(Func *f, Block target);
 void emit_jfalse(Func *f, IRRef cond, Block target);
 IRRef emit_phi(Func *f, int count, const IRRef *refs);
 IRRef emit_select(Func *f, IRRef cond, IRRef if_true, IRRef if_false);
-void emit_ret(Func *f);
+IRRef emit_arg(Func *f, int32_t pos, Type type);
+void emit_ret(Func *f, IRRef ref);
 IRRef emit_unop(Func *f, UnaryOp unop, IRRef ref);
 IRRef emit_binop(Func *f, OpCode binop, IRRef left, IRRef right);
 

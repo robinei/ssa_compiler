@@ -18,10 +18,12 @@ Func *func_new() {
     f->instrs = (Instr *)calloc(1, sizeof(Instr) * buffer_capacity) + f->static_value_capacity;
     f->types = (Type *)calloc(1, sizeof(Type) * buffer_capacity) + f->static_value_capacity;
 
+    f->types[IRREF_NONE] = TYPE_NONE;
+    f->types[IRREF_UNIT] = TYPE_UNIT;
     f->types[IRREF_FALSE] = TYPE_BOOL;
     f->types[IRREF_TRUE] = TYPE_BOOL;
     f->static_values[IRREF_TRUE].b = true;
-    f->static_value_size = 3; // NONE/FALSE/TRUE
+    f->static_value_size = 4; // NONE/UNIT/FALSE/TRUE
     return f;
 }
 
@@ -67,6 +69,9 @@ Block create_block(Func *f, Block idom_block) {
 
 static IRRef get_static_value(Func *f, Type type, StaticValue static_value) {
     assert(type != TYPE_NONE);
+    if (type == TYPE_BOOL) {
+        return static_value.b ? IRREF_TRUE : IRREF_FALSE;
+    }
     for (uint32_t salt = 0; salt < 10000; ++salt) {
         uint32_t hash = FNV_SEED;
         hash = fnv1a(&type, sizeof(type), hash);
@@ -156,6 +161,7 @@ void emit_sloc(Func *f, int32_t row, int32_t col) {
     emit_instr(f, OP_SLOC, row, col, TYPE_NONE);
 }
 
+IRRef get_static_type(Func *f, Type v)     { return get_static_value(f, TYPE_TYPE, (StaticValue) { .t = v }); }
 IRRef get_static_bool(Func *f, bool v)     { return get_static_value(f, TYPE_BOOL, (StaticValue) { .b = v }); }
 IRRef get_static_i8  (Func *f, int8_t v)   { return get_static_value(f, TYPE_I8,   (StaticValue) { .i = v }); }
 IRRef get_static_i16 (Func *f, int16_t v)  { return get_static_value(f, TYPE_I16,  (StaticValue) { .i = v }); }
@@ -278,13 +284,17 @@ IRRef emit_select(Func *f, IRRef cond, IRRef if_true, IRRef if_false) {
     return emit_instr(f, OP_SELECT, cond, emit_pair(f, if_true, if_false), type);
 }
 
-void emit_ret(Func *f) {
+IRRef emit_arg(Func *f, int32_t pos, Type type) {
+    return emit_instr(f, OP_ARG, pos, 0, type);
+}
+
+void emit_ret(Func *f, IRRef ref) {
     BlockInfo *curr_block_info = &f->blocks[f->curr_block];
     if (curr_block_info->is_finished) {
         // if RET follows a JFALSE that specialized into a JUMP, then we'll already be finished
         return;
     }
-    emit_instr(f, OP_RET, 0, 0, TYPE_NONE);
+    emit_instr(f, OP_RET, ref, 0, TYPE_NONE);
     curr_block_info->is_finished = true;
 }
 
@@ -315,14 +325,16 @@ static void perform_static_real_unop(UnaryOp unop, StaticValue *value, StaticVal
     default: assert(0 && "unary operator not implemented for int"); break;
     }
 }
-static Type get_unop_result_type(UnaryOp unop, Type right) {
-    if (unop == UNOP_NEG) { assert(TYPE_IS_NUM(right)); return right; }
-    if (unop == UNOP_NOT) { assert(right == TYPE_BOOL); return right; }
-    if (unop == UNOP_BNOT && TYPE_IS_INT(right)) { return right; }
-    assert(false && "illegal type for unary operator");
+static Type get_unop_result_type(UnaryOp unop, Type arg) {
+    if (unop == UNOP_NEG) { assert(TYPE_IS_NUM(arg)); return arg; }
+    if (unop == UNOP_NOT) { assert(arg == TYPE_BOOL); return arg; }
+    if (unop == UNOP_BNOT) { assert(TYPE_IS_INT(arg)); return arg; }
+    assert(0 && "illegal unop");
+    return TYPE_NONE;
 }
 IRRef emit_unop(Func *f, UnaryOp unop, IRRef ref) {
     Type result_type = get_unop_result_type(unop, f->types[ref]);
+    assert(result_type != TYPE_NONE);
     if (IRREF_IS_STATIC(ref)) {
         Type type = f->types[ref];
         const TypeInfo *type_info = get_type_info(type);
@@ -417,12 +429,14 @@ static Type get_binop_result_type(OpCode binop, Type left, Type right) {
     if (OP_IS_BOOL_BINOP(binop)) { assert(left == TYPE_BOOL); return TYPE_BOOL; }
     if (OP_IS_INT_BINOP(binop)) { assert(TYPE_IS_INT(left)); return left; }
     if (OP_IS_NUM_BINOP(binop)) { assert(TYPE_IS_NUM(left)); return left; }
-    assert(false && "illegal types for binary operator");
+    assert(0 && "illegal binop");
+    return TYPE_NONE;
 }
 IRRef emit_binop(Func *f, OpCode binop, IRRef left, IRRef right) {
     Type left_type = f->types[left];
     Type right_type = f->types[right];
     Type result_type = get_binop_result_type(binop, left_type, right_type);
+    assert(result_type != TYPE_NONE);
 
     if (IRREF_IS_STATIC(left) && IRREF_IS_STATIC(right)) {
         StaticValue result = {0};
@@ -488,6 +502,9 @@ static void print_operand(Func *f, OperandType operand_type, int32_t operand) {
         break;
     case OPERAND_FUNC:
         printf(" @%d", operand);
+        break;
+    case OPERAND_ARGPOS:
+        printf(" %d", operand);
         break;
     case OPERAND_ROW:
         printf(" row=%d", operand);
