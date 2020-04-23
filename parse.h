@@ -6,10 +6,11 @@
 #include "func.h"
 #include "sym.h"
 
+
 typedef struct {
     Symbol sym;
     Type type;
-    IRRef ref;
+    bool is_const;
 } EnvEntry;
 
 typedef struct {

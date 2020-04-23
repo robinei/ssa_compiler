@@ -11,6 +11,7 @@ typedef struct {
     Type type;
     IRRef ref;
     Slice sloc; // source location
+    int lvalue_env_index;
 } ParseResult;
 
 #define PARSE_RESULT_NONE ((ParseResult) { TYPE_NONE, IRREF_NONE, SLICE_EMPTY })
@@ -126,6 +127,9 @@ static bool is_reserved_word(char *str, int len) {
         break;
     case 'v':
         if (len == 3 && !memcmp(str, "var", len)) { return true; }
+        break;
+    case 'w':
+        if (len == 5 && !memcmp(str, "while", len)) { return true; }
         break;
     }
     return false;
@@ -282,31 +286,6 @@ static void skip_whitespace_excluding_newlines(ParseCtx *ctx) {
 }
 
 
-
-
-
-static void push_env(ParseCtx *ctx, Symbol sym, Type type, IRRef ref) {
-    if (ctx->env_size >= ctx->env_capacity) {
-        ctx->env_capacity = ctx->env_capacity ? ctx->env_capacity * 2 : 64;
-        ctx->env = malloc(sizeof(EnvEntry) * ctx->env_capacity);
-    }
-    ctx->env[ctx->env_size++] = (EnvEntry) {
-        .sym = sym,
-        .type = type,
-        .ref = ref,
-    };
-}
-
-static EnvEntry *env_lookup(ParseCtx *ctx, Symbol sym) {
-    for (int i = ctx->env_size - 1; i >= 0; --i) {
-        EnvEntry *entry = ctx->env + i;
-        if (entry->sym == sym) {
-            return entry;
-        }
-    }
-    return NULL;
-}
-
 static ParseResult parse_expr(ParseCtx *ctx) {
     return parse_infix(ctx, PREC_LOWEST + 1); // disallow '=' operator
 }
@@ -427,88 +406,31 @@ static ParseResult parse_expr_seq_in_new_env(ParseCtx *ctx, char *start) {
     ctx->env_size = prev_env_size;
     return result;
 }
-/*static struct expr *parse_struct(ParseCtx *ctx, char *start) {
-    struct expr *body = parse_expr_seq(ctx);
-    struct expr *result = expr_create(ctx, EXPR_STRUCT, SLICE_FROM(start));
-    result->struc.body_expr = body;
-    return result;
-}*/
 
-
-/*static struct expr_decl *parse_decls(ParseCtx *ctx) {
-    skip_whitespace(ctx);
-    char *start = ctx->ptr;
-    struct expr_decl *d = allocate(ctx->arena, sizeof(struct expr_decl));
-    expect_ident(ctx, "in declaration");
-    d->name_expr = symbol_create(ctx, start);
-    skip_whitespace(ctx);
-    if (match_char(ctx, ',')) {
-        d->next = parse_decls(ctx);
-        d->type_expr = d->next->type_expr;
-        d->value_expr = d->next->value_expr;
-        d->is_static = d->next->is_static;
-    }
-    else {
-        if (match_char(ctx, ':')) {
-            skip_whitespace(ctx);
-            if (match_keyword(ctx, "static")) {
-                d->is_static = true;
-                skip_whitespace(ctx);
-            }
-            d->type_expr = parse_expr(ctx);
-        }
-        if (match_char(ctx, '=')) {
-            skip_whitespace(ctx);
-            d->value_expr = parse_expr(ctx);
-        }
-        if (match_char(ctx, ';')) {
-            skip_whitespace(ctx);
-            d->next = parse_decls(ctx);
+static int env_lookup(ParseCtx *ctx, Symbol sym) {
+    assert(sym != SYMBOL_NONE);
+    for (int i = ctx->env_size - 1; i >= 0; --i) {
+        if (ctx->env[i].sym == sym) {
+            return i;
         }
     }
-    return d;
-}*/
-
-/*static struct expr *parse_fun(ParseCtx *ctx, bool is_type, char *start) {
-    struct expr *return_type_expr = NULL, *body_expr = NULL;
-    struct expr_decl *params = NULL;
-
-    skip_whitespace(ctx);
-    expect_char(ctx, '(', "after 'fun'");
-    bool prev_skip_newline = ctx->skip_newline;
-    ctx->skip_newline = true;
-    skip_whitespace(ctx);
-    if (ctx->ptr[0] != ')' && !(ctx->ptr[0] == '-' && ctx->ptr[1] == '>')) {
-        params = parse_decls(ctx);
-        skip_whitespace(ctx);
+    return 0;
+}
+static void push_env(ParseCtx *ctx, Symbol sym, Type type, IRRef ref, bool is_const) {
+    assert(sym != SYMBOL_NONE);
+    assert(type != TYPE_NONE);
+    assert(ref != IRREF_NONE);
+    if (ctx->env_size >= ctx->env_capacity) {
+        ctx->env_capacity = ctx->env_capacity ? ctx->env_capacity * 2 : 64;
+        ctx->env = malloc(sizeof(EnvEntry) * ctx->env_capacity);
     }
-    if (match_str(ctx, "->")) {
-        skip_whitespace(ctx);
-        return_type_expr = parse_expr(ctx);
-        skip_whitespace(ctx);
-    }
-    expect_char(ctx, ')', "after parameter list");
-    ctx->skip_newline = prev_skip_newline;
-    if (!is_type) {
-        skip_whitespace(ctx);
-        body_expr = parse_expr_seq_and_wrap_in_block(ctx);
-    } else {
-        for (struct expr_decl *p = params; p; p = p->next) {
-            if (!p->type_expr) {
-                PARSE_ERR_HERE("incomplete parameter types in preceding function type definition");
-            }
-        }
-        if (!return_type_expr) {
-            PARSE_ERR_HERE("missing return type in preceding function type definition");
-        }
-    }
-
-    struct expr *result = expr_create(ctx, EXPR_FUN, SLICE_FROM(start));
-    result->fun.params = params;
-    result->fun.return_type_expr = return_type_expr;
-    result->fun.body_expr = body_expr;
-    return result;
-}*/
+    ctx->env[ctx->env_size++] = (EnvEntry) {
+        .sym = sym,
+        .type = type,
+        .is_const = is_const,
+    };
+    define_symbol(ctx->func, ctx->func->curr_block, sym, ref);
+}
 
 static ParseResult parse_def(ParseCtx *ctx, bool is_const, char *start) {
     skip_whitespace(ctx);
@@ -532,7 +454,7 @@ static ParseResult parse_def(ParseCtx *ctx, bool is_const, char *start) {
         CHECK_TYPE(value_result, value_result.type == type_result.type, "does not match declared type");
     }
 
-    push_env(ctx, name_sym, value_result.type, value_result.ref);
+    push_env(ctx, name_sym, value_result.type, value_result.ref, is_const);
     return (ParseResult) { TYPE_UNIT, IRREF_UNIT, SLICE_FROM(start) };
 }
 
@@ -542,24 +464,27 @@ static ParseResult parse_if(ParseCtx *ctx, bool is_elif, char *start) {
     skip_whitespace(ctx);
     ParseResult pred_result = parse_expr(ctx);
     skip_whitespace(ctx);
-    CHECK_TYPE(pred_result, pred_result.type == TYPE_BOOL, "'if' condition must have type bool");
+    CHECK_TYPE(pred_result, pred_result.type == TYPE_BOOL, "'if' condition must have type Bool");
 
-    Block else_block = BLOCK_NONE, merge_block = BLOCK_NONE;
-    int prev_skip_emit = ctx->skip_emit;
+    Block then_block = BLOCK_NONE, else_block = BLOCK_NONE, merge_block = BLOCK_NONE;
     if (!ctx->skip_emit) {
         if (IRREF_IS_STATIC(pred_result.ref)) {
             if (pred_result.ref == IRREF_FALSE) {
                 ++ctx->skip_emit;
             }
         } else {
-            Block then_block = create_block(ctx->func, ctx->func->curr_block);
+            then_block = create_block(ctx->func, ctx->func->curr_block);
             else_block = create_block(ctx->func, ctx->func->curr_block);
             merge_block = create_block(ctx->func, ctx->func->curr_block);
             emit_jfalse(ctx->func, pred_result.ref, else_block);
+            seal_block(ctx->func, else_block);
             emit_jump(ctx->func, then_block);
+            seal_block(ctx->func, then_block);
             emit_block(ctx->func, then_block);
         }
     }
+    
+    int prev_skip_emit = ctx->skip_emit;
     
     char *then_start = ctx->ptr;
     expect_keyword(ctx, "then", "after 'if' condition");
@@ -580,10 +505,11 @@ static ParseResult parse_if(ParseCtx *ctx, bool is_elif, char *start) {
             }
         } else {
             emit_jump(ctx->func, merge_block);
+            seal_block(ctx->func, merge_block);
             emit_block(ctx->func, else_block);
         }
     }
-
+    
     ParseResult else_result;
     if (ctx->current_indent == then_indent && match_keyword(ctx, "else")) {
         else_result = parse_expr_seq_in_new_env(ctx, after_then);
@@ -597,7 +523,7 @@ static ParseResult parse_if(ParseCtx *ctx, bool is_elif, char *start) {
     }
     ctx->skip_emit = prev_skip_emit;
     CHECK_TYPE(else_result, else_result.type == then_result.type, "then and else branches must have equal types");
-
+    
     ParseResult result = {
         then_result.type,
         IRREF_NONE,
@@ -609,32 +535,56 @@ static ParseResult parse_if(ParseCtx *ctx, bool is_elif, char *start) {
         } else {
             emit_jump(ctx->func, merge_block);
             emit_block(ctx->func, merge_block);
-            result.ref = emit_phi(ctx->func, 2, (IRRef[]) { then_result.ref, else_result.ref });
         }
     }
     return result;
 }
 
-/*static struct expr *parse_single_arg_prim(ParseCtx *ctx, int prim, char *start) {
-    char *after_ident = ctx->ptr;
-    skip_whitespace(ctx);
-    if (!match_char(ctx, '(')) {
-        PARSE_ERR_HERE("expected '(' after '%.*s'", after_ident - start, start);
+static ParseResult parse_while(ParseCtx *ctx, char *start) {
+    Block pred_block = BLOCK_NONE, body_block = BLOCK_NONE, after_block = BLOCK_NONE;
+    if (!ctx->skip_emit) {
+        pred_block = create_block(ctx->func, ctx->func->curr_block);
+        body_block = create_block(ctx->func, pred_block);
+        after_block = create_block(ctx->func, pred_block);
+        emit_jump(ctx->func, pred_block);
+        emit_block(ctx->func, pred_block);
     }
+
     bool prev_skip_newline = ctx->skip_newline;
     ctx->skip_newline = true;
     skip_whitespace(ctx);
-    struct expr *e = parse_expr(ctx);
-    if (!match_char(ctx, ')')) {
-        PARSE_ERR_HERE("expected ')' after argument to '%.*s'", after_ident - start, start);
+    ParseResult pred_result = parse_expr(ctx);
+    skip_whitespace(ctx);
+    CHECK_TYPE(pred_result, pred_result.type == TYPE_BOOL, "'while' condition must have type Bool");
+    
+    if (!ctx->skip_emit) {
+        emit_jfalse(ctx->func, pred_result.ref, after_block);
+        seal_block(ctx->func, after_block);
+        emit_jump(ctx->func, body_block);
+        seal_block(ctx->func, body_block);
+        emit_block(ctx->func, body_block);
     }
+    char *body_start = ctx->ptr;
+    expect_keyword(ctx, "do", "after 'if' condition");
+    int body_indent = ctx->current_indent;
+    ParseResult body_result = parse_expr_seq_in_new_env(ctx, body_start);
+    CHECK_TYPE(body_result, body_result.type == TYPE_UNIT, "expects loop body to have type Unit");
     ctx->skip_newline = prev_skip_newline;
-    struct expr *result = expr_create(ctx, EXPR_PRIM, SLICE_FROM(start));
-    result->prim.kind = prim;
-    result->prim.arg_exprs[0] = e;
-    return result;
-}*/
-
+    if (ctx->current_indent > body_indent) {
+        PARSE_ERR_HERE("unexpected indentation");
+    }
+    
+    if (!ctx->skip_emit) {
+        emit_jump(ctx->func, pred_block);
+        seal_block(ctx->func, pred_block);
+        emit_block(ctx->func, after_block);
+    }
+    return (ParseResult) {
+        TYPE_UNIT,
+        IRREF_UNIT,
+        SLICE_FROM(start)
+    };
+}
 
 static ParseResult parse_unary(ParseCtx *ctx, UnaryOp unop, char *start) {
     skip_whitespace(ctx);
@@ -777,14 +727,21 @@ static ParseResult parse_atom(ParseCtx *ctx) {
             return parse_def(ctx, false, start);
         }
         break;
+    case 'w':
+        if (match_keyword(ctx, "while")) {
+            return parse_while(ctx, start);
+        }
+        break;
     }
     
     if (match_ident(ctx)) {
         Slice name = SLICE_FROM(start);
         Symbol sym = symbol_from_slice(name);
-        EnvEntry *entry = env_lookup(ctx, sym);
-        if (entry) {
-            return (ParseResult) { entry->type, entry->ref, name };
+        int env_index = env_lookup(ctx, sym);
+        if (env_index > 0) {
+            IRRef ref = lookup_symbol(ctx->func, ctx->func->curr_block, sym);
+            assert(ref != IRREF_NONE);
+            return (ParseResult) { ctx->env[env_index].type, ref, name, .lvalue_env_index = env_index };
         } else {
             PARSE_ERR_AT(name, "undefined variable");
         }
@@ -792,61 +749,34 @@ static ParseResult parse_atom(ParseCtx *ctx) {
     PARSE_ERR_HERE("unexpected input while parsing atom");
 }
 
-
-
-
-/*static struct expr_link *parse_args(ParseCtx *ctx) {
-    if (match_char(ctx, ')')) {
-        return NULL;
-    }
-    struct expr_link *a = allocate(ctx->arena, sizeof(struct expr_link));
-    a->expr = parse_expr(ctx);
-    skip_whitespace(ctx);
-    if (match_char(ctx, ',')) {
-        skip_whitespace(ctx);
-        a->next = parse_args(ctx);
-    } else {
-        expect_char(ctx, ')', "after argument list");
-    }
-    return a;
-}
-static struct expr *parse_call(ParseCtx *ctx, struct expr *callable_expr) {
-    bool prev_skip_newline = ctx->skip_newline;
-    ctx->skip_newline = true;
-    skip_whitespace(ctx);
-    struct expr_link *args = parse_args(ctx);
-    ctx->skip_newline = prev_skip_newline;
-    char *start = callable_expr->source_text.ptr;
-    struct expr *result = expr_create(ctx, EXPR_CALL, SLICE_FROM(start));
-    result->call.callable_expr = callable_expr;
-    result->call.args = args;
-    return result;
-}*/
-
 static ParseResult parse_and_or_binop(ParseCtx *ctx, OpCode binop, ParseResult lhs, int rhs_precedence) {
     assert(binop == OP_AND || binop == OP_OR);
     CHECK_TYPE(lhs, lhs.type == TYPE_BOOL, "expected bool type");
 
-    Block merge_block = BLOCK_NONE;
+    Block then_block = BLOCK_NONE, merge_block = BLOCK_NONE;
     int prev_skip_emit = ctx->skip_emit;
     if (binop == OP_AND) {
         if (lhs.ref == IRREF_FALSE) {
             ++ctx->skip_emit;
         } else if (!ctx->skip_emit && lhs.ref != IRREF_TRUE) {
-            Block then_block = create_block(ctx->func, ctx->func->curr_block);
+            then_block = create_block(ctx->func, ctx->func->curr_block);
             merge_block = create_block(ctx->func, ctx->func->curr_block);
             emit_jfalse(ctx->func, lhs.ref, merge_block);
+            seal_block(ctx->func, merge_block);
             emit_jump(ctx->func, then_block);
+            seal_block(ctx->func, then_block);
             emit_block(ctx->func, then_block);
         }
     } else {
         if (lhs.ref == IRREF_TRUE) {
             ++ctx->skip_emit;
         } else if (!ctx->skip_emit && lhs.ref != IRREF_FALSE) {
-            Block then_block = create_block(ctx->func, ctx->func->curr_block);
+            then_block = create_block(ctx->func, ctx->func->curr_block);
             merge_block = create_block(ctx->func, ctx->func->curr_block);
             emit_jfalse(ctx->func, lhs.ref, then_block);
+            seal_block(ctx->func, then_block);
             emit_jump(ctx->func, merge_block);
+            seal_block(ctx->func, merge_block);
             emit_block(ctx->func, then_block);
         }
     }
@@ -915,7 +845,21 @@ static ParseResult parse_infix(ParseCtx *ctx, int min_precedence) {
         switch (*ctx->ptr) {
         case '=':
             if (ctx->ptr[1] == '=') HANDLE_INFIX_BINOP(PREC_EQ, OP_EQ, 2)
-            else PARSE_ERR_HERE("'=' not implemented"); //HANDLE_INFIX_BINOP(PREC_LOWEST, PRIM_ASSIGN, 1)
+            else {
+                if (PREC_LOWEST < min_precedence) { return result; }
+                ++ctx->ptr;
+                if (!(result.lvalue_env_index > 0)) {
+                    PARSE_ERR_AT(result.sloc, "not a valid lvalue");
+                }
+                if (ctx->env[result.lvalue_env_index].is_const) {
+                    PARSE_ERR_AT(result.sloc, "cannot overwrite constant");
+                }
+                skip_whitespace(ctx);
+                ParseResult rhs = parse_expr(ctx);
+                CHECK_TYPE(rhs, result.type == rhs.type, "mismatching types");
+                define_symbol(ctx->func, ctx->func->curr_block, ctx->env[result.lvalue_env_index].sym, rhs.ref);
+                return (ParseResult) { TYPE_UNIT, IRREF_UNIT, SLICE_FROM(result.sloc.ptr) };
+            }
 
         case 'o':
             orig_ptr = ctx->ptr;
@@ -990,9 +934,18 @@ bool parse_module(ParseCtx *ctx, Slice source_text) {
         return false;
     }
 
+    ctx->env_size = 1; // reserve 0 as illegal
+    ctx->env_capacity = 128;
+    ctx->env = malloc(sizeof(EnvEntry) * ctx->env_capacity);
+    ctx->env[0] = (EnvEntry) {
+        .sym = SYMBOL_NONE,
+        .type = TYPE_NONE,
+    };
+
     Block entry_block = create_block(ctx->func, BLOCK_NONE);
+    IRRef param = add_param(ctx->func, entry_block, symbol_from_str("x"), TYPE_I32);
     emit_block(ctx->func, entry_block);
-    push_env(ctx, symbol_from_str("x"), TYPE_I32, emit_arg(ctx->func, 0, TYPE_I32));
+    push_env(ctx, symbol_from_str("x"), TYPE_I32, param, true);
 
     ctx->line_start = ctx->ptr = source_text.ptr;
     char *start = ctx->ptr;
@@ -1004,7 +957,7 @@ bool parse_module(ParseCtx *ctx, Slice source_text) {
     }
     emit_ret(ctx->func, result.ref);
     
-    printf("code size: %d\n", ctx->func->instrs_size);
+    printf("\nFinished code size: %d\n", ctx->func->instrs_size);
     print_code(ctx->func);
     ctx->func = prev_func;
     return true;

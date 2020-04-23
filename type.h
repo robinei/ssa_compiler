@@ -1,9 +1,9 @@
 #pragma once
 
 #include <assert.h>
-#include <stdint.h>
-#include <stdbool.h>
 #include <string.h>
+
+#include "sym.h"
 
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))

@@ -71,7 +71,6 @@ int main(int argc, char *argv[]) {
     emit_jump(f, merge_block);
 
     emit_block(f, merge_block);
-    emit_phi(f, 2, (IRRef[]) { then_result, else_result });
     emit_binop(f, OP_ADD, one, two);
 
     //postprocess_code(f);

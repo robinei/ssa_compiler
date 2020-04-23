@@ -5,6 +5,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+static void print_instr(Func *f, Block block, IRRef i);
+
+typedef union {
+    struct {
+        Block block;
+        Symbol sym;
+    };
+    uint64_t u64_repr;
+} EnvKey;
+
+typedef union {
+    IRRef ref;
+    uint64_t u64_repr;
+} EnvValue;
+
 Func *func_new() {
     Func *f = calloc(1, sizeof(Func));
     f->blocks_size = 1; // reserve slot for BLOCK_NONE
@@ -64,6 +79,10 @@ Block create_block(Func *f, Block idom_block) {
     BlockInfo *block_info = &f->blocks[block];
     memset(block_info, 0, sizeof(BlockInfo));
     block_info->idom_block = idom_block;
+    block_info->params = IRREF_NONE;
+    block_info->entry = IRREF_NONE;
+    block_info->jumps[0] = IRREF_NONE;
+    block_info->jumps[1] = IRREF_NONE;
     return block;
 }
 
@@ -102,9 +121,9 @@ static IRRef get_static_value(Func *f, Type type, StaticValue static_value) {
 
 static IRRef emit_instr(Func *f, OpCode opcode, int32_t left, int32_t right, Type type) {
     assert(opcode <= INSTR_OPCODE_MAX);
-    assert(left <= INSTR_LEFT_MAX);
-    assert(right <= INSTR_RIGHT_MAX);
-    assert(!f->blocks[f->curr_block].is_finished);
+    assert(left <= INSTR_OPERAND_MAX);
+    assert(right <= INSTR_OPERAND_MAX);
+    assert(opcode == OP_PARAM || !f->blocks[f->curr_block].is_filled);
 
     Instr instr = (Instr) {
         .opcode = opcode,
@@ -137,6 +156,8 @@ static IRRef emit_instr(Func *f, OpCode opcode, int32_t left, int32_t right, Typ
     f->instrs[result] = instr;
     f->types[result] = type;
     ++f->instrs_size;
+
+    print_instr(f, f->curr_block, result);
     return result;
 }
 
@@ -153,6 +174,7 @@ void emit_block(Func *f, Block block) {
         f->entry_block = block;
     }
 
+    block_info->entry = f->instrs_size;
     f->curr_block = block;
     emit_instr(f, OP_BLOCK, 0, block, TYPE_NONE);
 }
@@ -231,20 +253,106 @@ static int flatten_instr_args(Func *f, Instr instr, IRRef *refs, int max_refs) {
     return count;
 }
 
+
+static int get_jump_slot(BlockInfo *from_block_info, Block to_block) {
+    if (from_block_info->targets[0] == to_block) {
+        return 0;
+    }
+    assert(from_block_info->targets[1] == to_block);
+    return 1;
+}
+static int get_jump_arg_count(Func *f, BlockInfo *from_block_info, int jump_slot) {
+    int count = 0;
+    for (BlockArg args = from_block_info->args[jump_slot]; args; args = f->args[args].next) {
+        ++count;
+    }
+    return count;
+}
+static void add_jump_arg(Func *f, BlockInfo *from_block_info, int jump_slot, IRRef ref) {
+    if (f->args_size >= f->args_capacity) {
+        f->args_capacity = f->args_capacity ? f->args_capacity * 2 : 128;
+        f->args = realloc(f->args, sizeof(BlockArgEntry) * f->args_capacity);
+    }
+    BlockArg arg = ++f->args_size;
+    f->args[arg].ref = ref;
+    f->args[arg].next = from_block_info->args[jump_slot];
+    from_block_info->args[jump_slot] = arg;
+}
+static IRRef get_jump_arg(Func *f, BlockInfo *from_block_info, int jump_slot, int index) {
+    BlockArg arg = from_block_info->args[jump_slot];
+    for (; index > 0; --index) {
+        arg = f->args[arg].next;
+    }
+    assert(f->args[arg].ref != IRREF_NONE);
+    return f->args[arg].ref;
+}
+static void remove_jump_arg(Func *f, BlockInfo *from_block_info, int jump_slot, int index) {
+    BlockArg prev_arg = 0;
+    BlockArg arg = from_block_info->args[jump_slot];
+    assert(arg);
+    for (; index > 0; --index) {
+        prev_arg = arg;
+        arg = f->args[arg].next;
+        assert(arg);
+    }
+    if (prev_arg) {
+        f->args[prev_arg].next = f->args[arg].next;
+    } else {
+        assert(from_block_info->args[jump_slot] == arg);
+        from_block_info->args[jump_slot] = f->args[arg].next;
+    }
+}
+static int get_param_count(Func *f, BlockInfo *block_info) {
+    int count = 0;
+    IRRef param = block_info->params;
+    while (param != IRREF_NONE) {
+        Instr param_instr = f->instrs[param];
+        assert(param_instr.opcode == OP_PARAM);
+        assert(param_instr.left != IRREF_NONE);
+        ++count;
+        param = param_instr.right;
+    }
+    return count;
+}
+static Symbol get_param_symbol(Func *f, BlockInfo *block_info, int index) {
+    IRRef param = block_info->params;
+    Instr param_instr;
+    do {
+        param_instr = f->instrs[param];
+        assert(param_instr.opcode == OP_PARAM);
+        assert(param_instr.left != IRREF_NONE);
+        param = param_instr.right;
+    } while (index-- > 0);
+    return param_instr.left;
+}
 void emit_jump(Func *f, Block target) {
+    assert(f->curr_block != BLOCK_NONE);
     BlockInfo *curr_block_info = &f->blocks[f->curr_block];
-    if (curr_block_info->is_finished) {
+    if (curr_block_info->is_filled) {
         // if JUMP follows a JFALSE that specialized into a JUMP, then we'll already be finished
         return;
     }
-    if (f->instrs[f->instrs_size - 1].opcode == OP_BLOCK) {
-        // only the BLOCK instruction was emitted before this unconditional jump, so this block is unnecessary
-        curr_block_info->redirect_block = target;
-    }
+
+    BlockInfo *target_block_info = &f->blocks[target];
+    assert(target != curr_block_info->targets[1]);
+    curr_block_info->jumps[0] = f->instrs_size;
+    curr_block_info->targets[0] = target;
+    curr_block_info->next_source[0] = target_block_info->sources[0];
+    target_block_info->sources[0] = f->curr_block;
+    ++target_block_info->source_count;
+
     emit_instr(f, OP_JUMP, 0, target, TYPE_NONE);
-    curr_block_info->is_finished = true;
+    curr_block_info->is_filled = true;
+    
+    int param_count = get_param_count(f, target_block_info);
+    for (int i = param_count - 1; i >= 0; --i) {
+        Symbol sym = get_param_symbol(f, target_block_info, i);
+        IRRef ref = lookup_symbol(f, f->curr_block, sym);
+        add_jump_arg(f, curr_block_info, 0, ref);
+    }
 }
 void emit_jfalse(Func *f, IRRef cond, Block target) {
+    assert(f->curr_block != BLOCK_NONE);
     assert(f->types[cond] == TYPE_BOOL);
     if (IRREF_IS_STATIC(cond)) {
         if (f->static_values[cond].b) {
@@ -253,25 +361,22 @@ void emit_jfalse(Func *f, IRRef cond, Block target) {
             emit_jump(f, target); // unconditional jump, since condition is false
         }
     } else {
+        BlockInfo *curr_block_info = &f->blocks[f->curr_block];
+        BlockInfo *target_block_info = &f->blocks[target];
+        curr_block_info->jumps[1] = f->instrs_size;
+        curr_block_info->targets[1] = target;
+        curr_block_info->next_source[1] = target_block_info->sources[1];
+        target_block_info->sources[1] = f->curr_block;
+        ++target_block_info->source_count;
         emit_instr(f, OP_JFALSE, cond, target, TYPE_NONE);
-    }
-}
-
-IRRef emit_phi(Func *f, int count, const IRRef *refs) {
-    assert(count >= 2);
-    IRRef left = refs[0];
-    Type type = f->types[left];
-    IRRef right;
-    if (count == 2) {
-        right = refs[1];
-        assert(type == f->types[right]);
-    } else {
-        for (int i = 1; i < count; ++i) {
-            assert(type == f->types[refs[i]]);
+    
+        int param_count = get_param_count(f, target_block_info);
+        for (int i = param_count - 1; i >= 0; --i) {
+            Symbol sym = get_param_symbol(f, target_block_info, i);
+            IRRef ref = lookup_symbol(f, f->curr_block, sym);
+            add_jump_arg(f, curr_block_info, 1, ref);
         }
-        right = emit_create_ref_list(f, count - 1, refs + 1);
     }
-    return emit_instr(f, OP_PHI, left, right, type);
 }
 
 IRRef emit_select(Func *f, IRRef cond, IRRef if_true, IRRef if_false) {
@@ -284,18 +389,14 @@ IRRef emit_select(Func *f, IRRef cond, IRRef if_true, IRRef if_false) {
     return emit_instr(f, OP_SELECT, cond, emit_pair(f, if_true, if_false), type);
 }
 
-IRRef emit_arg(Func *f, int32_t pos, Type type) {
-    return emit_instr(f, OP_ARG, pos, 0, type);
-}
-
 void emit_ret(Func *f, IRRef ref) {
     BlockInfo *curr_block_info = &f->blocks[f->curr_block];
-    if (curr_block_info->is_finished) {
+    if (curr_block_info->is_filled) {
         // if RET follows a JFALSE that specialized into a JUMP, then we'll already be finished
         return;
     }
     emit_instr(f, OP_RET, ref, 0, TYPE_NONE);
-    curr_block_info->is_finished = true;
+    curr_block_info->is_filled = true;
 }
 
 
@@ -458,25 +559,201 @@ IRRef emit_binop(Func *f, OpCode binop, IRRef left, IRRef right) {
 
 
 
+// requires Func *f to be visible. don't count on 'break' exiting the loop completely
+#define FOREACH_SOURCE(Var, B) \
+    for (int _root = 0; _root < 2; ++_root) \
+    for (Block Var = f->blocks[B].sources[_root]; Var != BLOCK_NONE; Var = f->blocks[Var].next_source[_root])
+
+static int flatten_sources(Func *f, Block block, Block *output, int max_output) {
+    int count = 0;
+    FOREACH_SOURCE(source, block) {
+        assert(count < max_output);
+        output[count++] = source;
+    }
+    return count;
+}
+
+
+
+
+static int flatten_params(Func *f, IRRef param, IRRef *output, int max_output) {
+    int count = 0;
+    while (param != IRREF_NONE) {
+        Instr param_instr = f->instrs[param];
+        assert(param_instr.opcode == OP_PARAM);
+        assert(count < max_output);
+        assert(param_instr.left != IRREF_NONE);
+        output[count++] = param_instr.left;
+        param = param_instr.right;
+    }
+    return count;
+}
+static void remove_block_param(Func *f, Block block, int index) {
+
+}
+
+// check if all jumps to this block pass the same value, and if so remove both the param, and the branch arguments.
+// if the branch arguments are arguments to that block, then apply this function recursively.
+static void try_eliminate_param(Func *f, Block block, int param_index) {
+    IRRef first_arg = IRREF_NONE;
+    FOREACH_SOURCE(source_block, block) {
+        BlockInfo *source_block_info = &f->blocks[source_block];
+        int jump_slot = get_jump_slot(source_block_info, block);
+        IRRef arg = get_jump_arg(f, source_block_info, jump_slot, param_index);
+        if (first_arg == IRREF_NONE) {
+            first_arg = arg;
+        } else if (arg != first_arg) {
+            return;
+        }
+    }
+    remove_block_param(f, block, param_index);
+    FOREACH_SOURCE(source_block, block) {
+        BlockInfo *source_block_info = &f->blocks[source_block];
+        int jump_slot = get_jump_slot(source_block_info, block);
+        remove_jump_arg(f, source_block_info, jump_slot, param_index);
+        //try_eliminate_param(f, source_block, )
+    }
+}
+
+void define_symbol(Func *f, Block block, Symbol sym, IRRef ref) {
+    assert(block != TYPE_NONE);
+    assert(sym != SYMBOL_NONE);
+    assert(ref != IRREF_NONE);
+    EnvKey key = { .block = block, .sym = sym };
+    EnvValue value = { .ref = ref };
+    U64ToU64_put(&f->env_key_to_ref, key.u64_repr, value.u64_repr);
+}
+
+static IRRef add_param_internal(Func *f, Block block, Symbol sym, Type type) {
+    assert(block != BLOCK_NONE);
+    assert(sym != SYMBOL_NONE);
+    BlockInfo *block_info = &f->blocks[block];
+    IRRef param = emit_instr(f, OP_PARAM, sym, block_info->params, type);
+    block_info->params = param;
+    EnvKey key = { .block = block, .sym = sym };
+    EnvValue value = { .ref = param };
+    U64ToU64_put(&f->env_key_to_ref, key.u64_repr, value.u64_repr);
+    return param;
+}
+IRRef add_param(Func *f, Block block, Symbol sym, Type type) {
+    assert(type != TYPE_NONE);
+    return add_param_internal(f, block, sym, type);
+}
+
+/*
+static Symbol get_param_symbol(Func *f, Block block, int index) {
+
+}
+static void fixup_jumps_to_block(Func *f, Block block) {
+    assert(block != BLOCK_NONE);
+    BlockInfo *block_info = &f->blocks[block];
+    int param_count = get_param_count(f, block_info);
+    if (param_count == 0) {
+        return;
+    }
+
+    FOREACH_SOURCE(source_block, block) {
+        Instr *jump_instr = &f->instrs[find_jump(f, source_block, block)];
+        int arg_count = get_arg_count(f, jump_instr->extra);
+        assert(arg_count <= param_count);
+        int missing_count = param_count - arg_count;
+
+        for (int i = missing_count - 1; i <= 0; --i) {
+            Symbol sym = get_param_symbol(f, block, i);
+            IRRef ref = lookup_symbol(f, source_block, sym);
+            jump_instr->extra = create_block_arg(f, ref, jump_instr->extra);
+        }
+    }
+}
+*/
+
+void seal_block(Func *f, Block block) {
+    assert(block != BLOCK_NONE);
+    BlockInfo *block_info = &f->blocks[block];
+    assert(!block_info->is_sealed);
+    block_info->is_sealed = true;
+    //fixup_jumps_to_block(f, block);
+}
+
+IRRef lookup_symbol(Func *f, Block block, Symbol sym) {
+    EnvKey key = { .block = block, .sym = sym };
+    EnvValue value;
+    if (U64ToU64_get(&f->env_key_to_ref, key.u64_repr, &value.u64_repr)) {
+        return value.ref;
+    }
+
+    // not found in this block. must recurse to source blocks.
+    
+    BlockInfo *block_info = &f->blocks[block];
+    if (block_info->is_sealed) {
+        // being sealed means there will not be more source blocks
+        if (block_info->source_count == 0) {
+            // not found, and this is the entry block. so it doesn't exist.
+            return IRREF_NONE;
+        }
+        if (block_info->source_count == 1) {
+            // trivial case
+            FOREACH_SOURCE(source_block, block) {
+                return lookup_symbol(f, source_block, sym);
+            }
+        }
+    }
+
+    int prev_param_count = get_param_count(f, block_info);
+
+    // this is a merge block, so we need to get this value as an argument.
+    // add incomplete parameter to avoid infinite recursion (it will get correct type later).
+    IRRef param = add_param_internal(f, block, sym, TYPE_NONE);
+
+    // we fixup the jumps in any blocks already known to target this.
+    FOREACH_SOURCE(source_block, block) {
+        IRRef ref = lookup_symbol(f, source_block, sym);
+        assert(ref != IRREF_NONE);
+        
+        // disallow cycles, before there are any known definitions.
+        // code generation must ensure definitions are added to the graph before generating uses.
+        assert(ref != param);
+        assert(f->types[ref] != TYPE_NONE);
+        f->types[param] = f->types[ref]; // fixup type
+
+        // add jump argument
+        BlockInfo *source_block_info = &f->blocks[source_block];
+        int jump_slot = get_jump_slot(source_block_info, block);
+        assert(prev_param_count == get_jump_arg_count(f, source_block_info, jump_slot));
+        add_jump_arg(f, source_block_info, jump_slot, ref);
+    }
+
+    //try_eliminate_param(f, block, 0);
+    return param;
+}
+
+
+
+
+
+
 static void print_static_value(Func *f, IRRef ref) {
     assert(IRREF_IS_STATIC(ref));
     StaticValue *static_value = &f->static_values[ref];
     const TypeInfo *type_info = get_type_info(f->types[ref]);
     switch (type_info->kind) {
+    case TK_UNIT:
+        printf("()");
+        break;
     case TK_BOOL:
-        printf(" <%s>", static_value->b ? "true" : "false");
+        printf("<%s>", static_value->b ? "true" : "false");
         break;
     case TK_INT:
-        printf(" <%ld>", static_value->i);
+        printf("<%ld>", static_value->i);
         break;
     case TK_UINT:
-        printf(" <%lu>", static_value->u);
+        printf("<%lu>", static_value->u);
         break;
     case TK_REAL:
-        printf(" <%f>", static_value->f);
+        printf("<%f>", static_value->f);
         break;
     default:
-        printf(" %d", ref);
+        printf("%d", ref);
         break;
     }
 }
@@ -484,7 +761,7 @@ static void print_value_operand(Func *f, IRRef ref) {
     if (IRREF_IS_STATIC(ref)) {
         print_static_value(f, ref);
     } else {
-        printf(" %d", ref);
+        printf("%d", ref);
     }
 }
 static void print_operand(Func *f, OperandType operand_type, int32_t operand) {
@@ -492,19 +769,20 @@ static void print_operand(Func *f, OperandType operand_type, int32_t operand) {
     case OPERAND_NONE:
         break;
     case OPERAND_REF:
+        putchar(' ');
         print_value_operand(f, operand);
         break;
     case OPERAND_BLOCK:
         printf(" :%d", operand);
+        break;
+    case OPERAND_SYM:
+        printf(" %s", symbol_name(operand));
         break;
     case OPERAND_UNOP:
         assert(0);
         break;
     case OPERAND_FUNC:
         printf(" @%d", operand);
-        break;
-    case OPERAND_ARGPOS:
-        printf(" %d", operand);
         break;
     case OPERAND_ROW:
         printf(" row=%d", operand);
@@ -516,6 +794,7 @@ static void print_operand(Func *f, OperandType operand_type, int32_t operand) {
 }
 static const char *get_type_suffix_for_type(Type type) {
     switch (type) {
+    case TYPE_UNIT: return ".unit";
     case TYPE_BOOL: return ".bool";
     case TYPE_I8: return ".i8";
     case TYPE_I16: return ".i16";
@@ -551,28 +830,81 @@ static const char *get_unop_name(UnaryOp unop) {
     default: assert(0 && "illegal unop"); break;
     }
 }
+static void print_params(Func *f, IRRef param) {
+    bool has_printed = false;
+    while (param != IRREF_NONE) {
+        if (has_printed) {
+            printf(", ");
+        } else {
+            printf(" (");
+        }
+        has_printed = true;
+        Instr instr = f->instrs[param];
+        assert(instr.opcode == OP_PARAM);
+        printf("%s/%d", symbol_name(instr.left), param);
+        param = instr.right;
+    }
+    if (has_printed) {
+        putchar(')');
+    }
+}
+static void print_jump_args(Func *f, Block from_block, Block to_block) {
+    BlockInfo *from_block_info = &f->blocks[from_block];
+    int jump_slot = get_jump_slot(from_block_info, to_block);
+    BlockArg arg = from_block_info->args[jump_slot];
+    bool has_printed = false;
+    while (arg) {
+        if (has_printed) {
+            printf(", ");
+        } else {
+            printf(" (");
+        }
+        has_printed = true;
+        BlockArgEntry entry = f->args[arg];
+        print_value_operand(f, entry.ref);
+        arg = entry.next;
+    }
+    if (has_printed) {
+        putchar(')');
+    }
+}
+static void print_instr(Func *f, Block block, IRRef i) {
+    Instr instr = f->instrs[i];
+    const OpCodeInfo *opinfo = &opcode_info[instr.opcode];
+    if (instr.opcode == OP_NOP) {
+        // don't print
+    } else if (instr.opcode == OP_PARAM) {
+        // don't print since they are emitted all over the place, and don't do anything.
+        // they are only used for storage (to get an IRRef)
+    } else if (instr.opcode == OP_BLOCK) {
+        printf(":%d", instr.right);
+        print_params(f, f->blocks[instr.right].params);
+        putchar('\n');
+    } else if (instr.opcode == OP_UNOP) {
+        printf("    %d <- %s%s ", i, get_unop_name((UnaryOp)instr.left), get_type_suffix(f, instr));
+        print_value_operand(f, instr.right);
+        putchar('\n');
+    } else {
+        if (OP_HAS_RESULT(instr.opcode)) {
+            printf("    %d <- %s%s", i, opinfo->name, get_type_suffix(f, instr));
+        } else {
+            printf("    %s%s", opinfo->name, get_type_suffix(f, instr));
+        }
+        print_operand(f, opinfo->left, instr.left);
+        print_operand(f, opinfo->right, instr.right);
+        if (instr.opcode == OP_JUMP || instr.opcode == OP_JFALSE) {
+            print_jump_args(f, block, instr.right);
+        }
+        putchar('\n');
+    }
+}
 void print_code(Func *f) {
+    Block curr_block = BLOCK_NONE;
     for (int i = 0; i < f->instrs_size; ++i) {
         Instr instr = f->instrs[i];
-        const OpCodeInfo *opinfo = &opcode_info[instr.opcode];
-        if (instr.opcode == OP_NOP) {
-            printf("    nop\n");
-        } else if (instr.opcode == OP_BLOCK) {
-            printf(":%d\n", instr.right);
-        } else if (instr.opcode == OP_UNOP) {
-            printf("    %d <- %s", i, get_unop_name((UnaryOp)instr.left));
-            printf("%s", get_type_suffix(f, instr));
-            print_value_operand(f, instr.right);
-        } else {
-            if (OP_HAS_RESULT(instr.opcode)) {
-                printf("    %d <- %s", i, opinfo->name);
-            } else {
-                printf("    %s", opinfo->name);
-            }
-            printf("%s", get_type_suffix(f, instr));
-            print_operand(f, opinfo->left, instr.left);
-            print_operand(f, opinfo->right, instr.right);
-            putchar('\n');
+        if (instr.opcode == OP_BLOCK) {
+            curr_block = instr.right;
         }
+        print_instr(f, curr_block, i);
     }
 }

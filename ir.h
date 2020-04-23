@@ -11,16 +11,7 @@ typedef enum {
     OP_RET,     // left is return value. return from current function.
     OP_COPY,    // left register is copied to right. has no result. not used in SSA form.
     
-    // all instructions not having a result must come before PHI!
-
-    // left and right holds values defined in preceding basic blocks. if more than 2 arguments, then right
-    // is a list of args, composed of chained PAIRs (left still holds the first argument).
-    // so for "phi a, b, c, d" the encoding would be "phi a, pair(b, pair(c, d))".
-    // when eliminating the PHI node later, the predecessor block will become responsible for making sure the
-    // target register (of the PHI) holds the one ref available from this block.
-    // useful for giving a name to the result of an if-expression for example, whichever branch produces it.
-    // only used in SSA form.
-    OP_PHI,
+    // all instructions not having a result must come before SELECT!
     
     OP_SELECT,  // left is bool condition; right is PAIR to choose from (true -> pair.left, false -> pair.right).
 
@@ -28,7 +19,8 @@ typedef enum {
     OP_PAIR,
     
     OP_CALL,    // left is function id. right is a single argument or an argument list: pair(a, pair(b, c)) etc.
-    OP_ARG,     // left is argument position. returns function argument.
+
+    OP_PARAM,   // left param symbol. right is next param. no-op used to chain arguments.
 
     // unary operators take an UnaryOp operator in left, and a single operand in right, and output the same type.
     OP_UNOP,
@@ -73,7 +65,7 @@ typedef enum {
     UNOP_BNOT,  // int  -> int
 } UnaryOp;
 
-#define OP_HAS_RESULT(opcode) ((opcode) >= OP_PHI)
+#define OP_HAS_RESULT(opcode) ((opcode) >= OP_SELECT)
 #define OP_IS_BINOP(opcode) ((opcode) >= OP_AND)
 #define OP_IS_NUM_BINOP(opcode) ((opcode) >= OP_ADD)
 #define OP_IS_BOOL_BINOP(opcode) ((opcode) >= OP_AND && (opcode) <= OP_OR)
@@ -83,22 +75,19 @@ typedef enum {
 #define OP_IS_REAL_BINOP(opcode) ((opcode) >= OP_POW && (opcode) <= OP_POW)
 #define OP_IS_INT_BINOP(opcode) ((opcode) >= OP_MOD && (opcode) <= OP_BSHR)
 
-#define INSTR_OPCODE_BITS   8
-#define INSTR_LEFT_BITS     28
-#define INSTR_RIGHT_BITS    28
+#define INSTR_OPERAND_BITS  19
+#define INSTR_OPCODE_BITS   (64 - INSTR_OPERAND_BITS * 3)
 
 #define INSTR_OPCODE_MAX    ((1 << INSTR_OPCODE_BITS) - 1)
-#define INSTR_LEFT_MAX      ((1 << INSTR_LEFT_BITS) - 1)
-#define INSTR_RIGHT_MAX     ((1 << INSTR_RIGHT_BITS) - 1)
+#define INSTR_OPERAND_MAX   ((1 << INSTR_OPERAND_BITS) - 1)
 
-static_assert(INSTR_OPCODE_BITS + INSTR_LEFT_BITS + INSTR_RIGHT_BITS == 64, "instruction fields must total 64 bits");
 static_assert(OPCODE_COUNT <= INSTR_OPCODE_MAX, "not enough bits for all opcodes");
 
 typedef union {
     struct {
         int64_t opcode : INSTR_OPCODE_BITS;
-        int64_t left   : INSTR_LEFT_BITS;
-        int64_t right  : INSTR_RIGHT_BITS;
+        int64_t left   : INSTR_OPERAND_BITS;
+        int64_t right  : INSTR_OPERAND_BITS;
     };
     uint64_t u64_repr;
 } Instr;
@@ -108,9 +97,9 @@ typedef enum {
     OPERAND_NONE,
     OPERAND_REF,
     OPERAND_BLOCK,
+    OPERAND_SYM,
     OPERAND_UNOP,
     OPERAND_FUNC,
-    OPERAND_ARGPOS,
     OPERAND_ROW,
     OPERAND_COL,
 } OperandType;

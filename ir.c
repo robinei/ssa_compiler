@@ -9,11 +9,10 @@ const OpCodeInfo opcode_info[OPCODE_COUNT] = {
     [OP_RET]    = { "ret",      OPERAND_REF,    OPERAND_NONE },
     [OP_COPY]   = { "copy",     OPERAND_REF,    OPERAND_REF },
     
-    [OP_PHI]    = { "phi",      OPERAND_REF,    OPERAND_REF },
     [OP_SELECT] = { "select",   OPERAND_REF,    OPERAND_REF },
     [OP_PAIR]   = { "pair",     OPERAND_REF,    OPERAND_REF },
     [OP_CALL]   = { "call",     OPERAND_FUNC,   OPERAND_REF },
-    [OP_ARG]    = { "arg",      OPERAND_ARGPOS, OPERAND_NONE },
+    [OP_PARAM]  = { "param",    OPERAND_SYM,    OPERAND_REF },
 
     [OP_UNOP]   = { "unop",     OPERAND_UNOP,   OPERAND_REF },
     
@@ -46,7 +45,7 @@ const OpCodeInfo opcode_info[OPCODE_COUNT] = {
 
 
 bool is_result_reusable(OpCode opcode) {
-    if (!OP_HAS_RESULT(opcode) || opcode == OP_PHI || opcode == OP_CALL) {
+    if (!OP_HAS_RESULT(opcode) || opcode == OP_CALL || opcode == OP_PARAM) {
         return false;
     }
     const OpCodeInfo *opinfo = &opcode_info[opcode];
