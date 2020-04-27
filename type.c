@@ -39,7 +39,7 @@ static Type alloc_type(void) {
 }
 
 const TypeInfo *get_type_info(Type type) {
-    assert(type > TYPE_NONE);
+    assert(type > 0);
     assert(type < type_infos_size);
     return &type_infos[type];
 }
@@ -118,7 +118,7 @@ static Type intern_type_into(TypeInfo *type_info, Type into_type) {
 
         Type found;
         if (!U32Map_get(&typemap, type_info->hash, &found)) {
-            if (into_type == TYPE_NONE) {
+            if (!into_type) {
                 into_type = alloc_type();
             }
             copy_type_info(&type_infos[into_type], type_info);
@@ -126,15 +126,15 @@ static Type intern_type_into(TypeInfo *type_info, Type into_type) {
             return into_type;
         }
         if (type_info_equal(type_info, get_type_info(found))) {
-            assert(into_type == TYPE_NONE);
+            assert(!into_type);
             return found;
         }
     }
     assert(0 && "should not happen");
-    return TYPE_NONE;
+    return 0;
 }
 static Type intern_type(TypeInfo *type_info) {
-    return intern_type_into(type_info, TYPE_NONE);
+    return intern_type_into(type_info, 0);
 }
 
 Type get_ptr_type(Type target_type) {

@@ -109,7 +109,6 @@ extern const OpCodeInfo opcode_info[OPCODE_COUNT];
 bool is_result_reusable(OpCode opcode);
 
 typedef int32_t Value;
-#define VALUE_NONE 0
 #define VALUE_UNIT -1
 #define VALUE_FALSE -2
 #define VALUE_TRUE -3

@@ -14,7 +14,7 @@ typedef struct {
     int lvalue_env_index;
 } ParseResult;
 
-#define PARSE_RESULT_NONE ((ParseResult) { TYPE_NONE, VALUE_NONE, SLICE_EMPTY })
+#define PARSE_RESULT_NONE ((ParseResult) { 0, 0, SLICE_EMPTY })
 
 #define SLICE_HERE          slice_from_str_len(ctx->ptr, 1)
 #define SLICE_FROM(Start)   slice_from_str_len((Start), ctx->ptr - (Start))
@@ -302,7 +302,7 @@ static ParseResult parse_string(ParseCtx *ctx) {
             }
             int length = start + 1 - ctx->ptr++;
             Type type = get_ptr_type(get_array_type(length, TYPE_U8));
-            return (ParseResult) { type, VALUE_NONE, SLICE_FROM(start) }; // TODO get Value
+            return (ParseResult) { type, 0, SLICE_FROM(start) }; // TODO get Value
         }
         case '\0':
             PARSE_ERR_HERE("unexpected end of input while parsing string literal");
@@ -375,7 +375,7 @@ static ParseResult parse_expr_seq_at_indent(ParseCtx *ctx, int indent_to_keep, c
         result = parse_infix(ctx, PREC_LOWEST); // allow '='
     }
 out:
-    if (result.type == TYPE_NONE) {
+    if (!result.type) {
         PARSE_ERR_HERE("expected block expression");
     }
     result.sloc = SLICE_FROM(start);
@@ -408,7 +408,7 @@ static ParseResult parse_expr_seq_in_new_env(ParseCtx *ctx, char *start) {
 }
 
 static int env_lookup(ParseCtx *ctx, Symbol sym) {
-    assert(sym != SYMBOL_NONE);
+    assert(sym);
     for (int i = ctx->env_size - 1; i >= 0; --i) {
         if (ctx->env[i].sym == sym) {
             return i;
@@ -417,9 +417,9 @@ static int env_lookup(ParseCtx *ctx, Symbol sym) {
     return 0;
 }
 static void push_env(ParseCtx *ctx, Symbol sym, Type type, Value value, bool is_const) {
-    assert(sym != SYMBOL_NONE);
-    assert(type != TYPE_NONE);
-    assert(value != VALUE_NONE);
+    assert(sym);
+    assert(type);
+    assert(value);
     if (ctx->env_size >= ctx->env_capacity) {
         ctx->env_capacity = ctx->env_capacity ? ctx->env_capacity * 2 : 64;
         ctx->env = malloc(sizeof(EnvEntry) * ctx->env_capacity);
@@ -450,7 +450,7 @@ static ParseResult parse_def(ParseCtx *ctx, bool is_const, char *start) {
     expect_char(ctx, '=', "in definition");
     skip_whitespace(ctx);
     ParseResult value_result = parse_expr(ctx);
-    if (type_result.type != TYPE_NONE) {
+    if (type_result.type) {
         CHECK_TYPE(value_result, value_result.type == type_result.type, "does not match declared type");
     }
 
@@ -467,7 +467,7 @@ static ParseResult parse_if(ParseCtx *ctx, bool is_elif, char *start) {
     CHECK_TYPE(pred_result, pred_result.type == TYPE_BOOL, "'if' condition must have type Bool");
 
     int curr_skip_emit = ctx->skip_emit;
-    Block then_block = BLOCK_NONE, else_block = BLOCK_NONE, merge_block = BLOCK_NONE;
+    Block then_block = 0, else_block = 0, merge_block = 0;
     if (!curr_skip_emit) {
         if (VALUE_IS_STATIC(pred_result.value)) {
             if (pred_result.value == VALUE_FALSE) {
@@ -497,7 +497,7 @@ static ParseResult parse_if(ParseCtx *ctx, bool is_elif, char *start) {
         PARSE_ERR_HERE("unexpected indentation");
     }
 
-    Value result_value = VALUE_NONE;
+    Value result_value = 0;
     if (!curr_skip_emit) {
         if (VALUE_IS_STATIC(pred_result.value)) {
             if (pred_result.value == VALUE_TRUE) {
@@ -542,7 +542,7 @@ static ParseResult parse_if(ParseCtx *ctx, bool is_elif, char *start) {
 }
 
 static ParseResult parse_while(ParseCtx *ctx, char *start) {
-    Block pred_block = BLOCK_NONE, body_block = BLOCK_NONE, after_block = BLOCK_NONE;
+    Block pred_block = 0, body_block = 0, after_block = 0;
     if (!ctx->skip_emit) {
         pred_block = create_block(ctx->func);
         body_block = create_block(ctx->func);
@@ -596,7 +596,7 @@ static ParseResult parse_unary(ParseCtx *ctx, UnaryOp unop, char *start) {
     case UNOP_BNOT: if (!TYPE_IS_INT(arg.type)) { PARSE_ERR_AT(arg.sloc, "expected integer type"); } break;
     }
     if (ctx->skip_emit) {
-        return (ParseResult) { arg.type, VALUE_NONE, SLICE_FROM(start) };
+        return (ParseResult) { arg.type, 0, SLICE_FROM(start) };
     } else {
         Value value = emit_unop(ctx->func, unop, arg.value);
         return (ParseResult) { arg.type, value, SLICE_FROM(start) };
@@ -741,7 +741,7 @@ static ParseResult parse_atom(ParseCtx *ctx) {
         int env_index = env_lookup(ctx, sym);
         if (env_index > 0) {
             Value value = lookup_symbol(ctx->func, get_current_block(ctx->func), sym);
-            assert(value != VALUE_NONE);
+            assert(value);
             return (ParseResult) { ctx->env[env_index].type, value, name, .lvalue_env_index = env_index };
         } else {
             PARSE_ERR_AT(name, "undefined variable");
@@ -754,7 +754,7 @@ static ParseResult parse_and_or_binop(ParseCtx *ctx, OpCode binop, ParseResult l
     assert(binop == OP_AND || binop == OP_OR);
     CHECK_TYPE(lhs, lhs.type == TYPE_BOOL, "expected bool type");
 
-    Block then_block = BLOCK_NONE, merge_block = BLOCK_NONE;
+    Block then_block = 0, merge_block = 0;
     int curr_skip_emit = ctx->skip_emit;
     if (binop == OP_AND) {
         if (lhs.value == VALUE_FALSE) {
@@ -786,7 +786,7 @@ static ParseResult parse_and_or_binop(ParseCtx *ctx, OpCode binop, ParseResult l
     ctx->skip_emit = curr_skip_emit;
     CHECK_TYPE(rhs, rhs.type == TYPE_BOOL, "expected bool type");
 
-    ParseResult result = { TYPE_BOOL, VALUE_NONE, SLICE_FROM(lhs.sloc.ptr) };
+    ParseResult result = { TYPE_BOOL, 0, SLICE_FROM(lhs.sloc.ptr) };
     if (binop == OP_AND) {
         if (lhs.value == VALUE_FALSE) { return lhs; } // short circuit
         if (lhs.value == VALUE_TRUE) { return rhs; } // simplify
@@ -812,7 +812,7 @@ static ParseResult parse_binop(ParseCtx *ctx, OpCode binop, ParseResult lhs, int
     ParseResult rhs = parse_infix(ctx, rhs_precedence);
     if (lhs.type != rhs.type) { CHECK_TYPE(rhs, lhs.type == rhs.type, "type mismatch"); }
 
-    ParseResult result = { lhs.type, VALUE_NONE, SLICE_FROM(lhs.sloc.ptr) };
+    ParseResult result = { lhs.type, 0, SLICE_FROM(lhs.sloc.ptr) };
 
     if (OP_IS_EQCMP_BINOP(binop)) {  result.type = TYPE_BOOL; } // anything goes. TODO: smarter comparison?
     else if (OP_IS_RELCMP_BINOP(binop)) { CHECK_TYPE(rhs, TYPE_IS_NUM(rhs.type), "expected numeric type"); result.type = TYPE_BOOL; }
@@ -938,10 +938,7 @@ bool parse_module(ParseCtx *ctx, Slice source_text) {
     ctx->env_size = 1; // reserve 0 as illegal
     ctx->env_capacity = 128;
     ctx->env = malloc(sizeof(EnvEntry) * ctx->env_capacity);
-    ctx->env[0] = (EnvEntry) {
-        .sym = SYMBOL_NONE,
-        .type = TYPE_NONE,
-    };
+    ctx->env[0] = (EnvEntry) { .sym = 0, .type = 0 };
 
     Block entry_block = create_block(ctx->func);
     Value param = add_block_param(ctx->func, entry_block, TYPE_I32);

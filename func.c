@@ -78,7 +78,7 @@ Block get_current_block(Func *f) {
 
 Func *func_new() {
     Func *f = calloc(1, sizeof(Func));
-    f->blocks_size = 1; // reserve slot for BLOCK_NONE
+    f->blocks_size = 1; // reserve slot for null-block
     f->blocks_capacity = 128;
     f->blocks = calloc(1, sizeof(BlockInfo) * f->blocks_capacity);
     
@@ -88,13 +88,13 @@ Func *func_new() {
     f->static_values = (StaticValue *)calloc(1, sizeof(StaticValue) * total_value_capacity) + f->static_value_capacity;
     f->value_types = (Type *)calloc(1, sizeof(Type) * total_value_capacity) + f->static_value_capacity;
 
-    f->value_types[VALUE_NONE] = TYPE_NONE;
+    f->value_types[0] = 0; // null-value
     f->value_types[VALUE_UNIT] = TYPE_UNIT;
     f->value_types[VALUE_FALSE] = TYPE_BOOL;
     f->value_types[VALUE_TRUE] = TYPE_BOOL;
     f->static_values[VALUE_TRUE].b = true;
-    f->static_value_size = 4; // UNIT/FALSE/TRUE
-    f->other_value_size = 1; // NONE
+    f->static_value_size = 3; // reserve slots form UNIT/FALSE/TRUE
+    f->other_value_size = 1; // reserve slot for  null-value
     return f;
 }
 
@@ -131,7 +131,7 @@ Block create_block(Func *f) {
 }
 
 static Value get_static_value(Func *f, Type type, StaticValue static_value) {
-    assert(type != TYPE_NONE);
+    assert(type);
     if (type == TYPE_BOOL) {
         return static_value.b ? VALUE_TRUE : VALUE_FALSE;
     }
@@ -160,7 +160,7 @@ static Value get_static_value(Func *f, Type type, StaticValue static_value) {
         }
     }
     assert(0 && "should not happen");
-    return VALUE_NONE;
+    return 0;
 }
 
 static Value create_value(Func *f, Type type) {
@@ -179,7 +179,7 @@ static Value emit_instr(Func *f, OpCode opcode, int32_t left, int32_t right, Typ
     assert(left <= INSTR_OPERAND_MAX);
     assert(right <= INSTR_OPERAND_MAX);
     assert(!curr_block_info->is_filled);
-    assert(type != TYPE_NONE || !OP_HAS_RESULT(opcode));
+    assert(type || !OP_HAS_RESULT(opcode));
 
     Value result = create_value(f, type);
     Instr instr = (Instr) {
@@ -232,7 +232,7 @@ static int get_explicit_param_count(BlockInfo *block_info) {
     int count = 0;
     BlockParam p;
     vector_foreach(block_info->params, p) {
-        if (p.name == SYMBOL_NONE) {
+        if (!p.name) {
             ++count;
         }
     }
@@ -241,7 +241,7 @@ static int get_explicit_param_count(BlockInfo *block_info) {
 static void add_jump_args(Func *f, BlockInfo *target_block_info, BlockInfo *source_block_info, int jump_slot, int arg_count, Value *args) {
     assert(arg_count == get_explicit_param_count(target_block_info));
     for (int i = 0; i < arg_count; ++i) {
-        assert(args[i] != VALUE_NONE);
+        assert(args[i]);
         vector_push(source_block_info->args[jump_slot], args[i]);
     }
     for (int i = arg_count; i < vector_size(target_block_info->params); ++i) {
@@ -250,7 +250,7 @@ static void add_jump_args(Func *f, BlockInfo *target_block_info, BlockInfo *sour
     }
 }
 void emit_jump_with_args(Func *f, Block target, int arg_count, Value *args) {
-    assert(f->curr_block != BLOCK_NONE);
+    assert(f->curr_block);
     BlockInfo *curr_block_info = &f->blocks[f->curr_block];
     BlockInfo *target_block_info = &f->blocks[target];
     if (curr_block_info->is_filled) {
@@ -260,12 +260,12 @@ void emit_jump_with_args(Func *f, Block target, int arg_count, Value *args) {
     assert(target != curr_block_info->targets[1]);
     curr_block_info->targets[0] = target;
     vector_push(target_block_info->sources, f->curr_block);
-    emit_instr(f, OP_JUMP, 0, target, TYPE_NONE);
+    emit_instr(f, OP_JUMP, 0, target, 0);
     curr_block_info->is_filled = true;
     add_jump_args(f, target_block_info, curr_block_info, 0, arg_count, args);
 }
 void emit_jfalse_with_args(Func *f, Value cond, Block target, int arg_count, Value *args) {
-    assert(f->curr_block != BLOCK_NONE);
+    assert(f->curr_block);
     assert(f->value_types[cond] == TYPE_BOOL);
     if (VALUE_IS_STATIC(cond)) {
         if (f->static_values[cond].b) {
@@ -278,7 +278,7 @@ void emit_jfalse_with_args(Func *f, Value cond, Block target, int arg_count, Val
         BlockInfo *target_block_info = &f->blocks[target];
         curr_block_info->targets[1] = target;
         vector_push(target_block_info->sources, f->curr_block);
-        emit_instr(f, OP_JFALSE, cond, target, TYPE_NONE);
+        emit_instr(f, OP_JFALSE, cond, target, 0);
         add_jump_args(f, target_block_info, curr_block_info, 1, arg_count, args);
     }
 }
@@ -305,7 +305,7 @@ void emit_ret(Func *f, Value ref) {
         // if RET follows a JFALSE that specialized into a JUMP, then we'll already be finished
         return;
     }
-    emit_instr(f, OP_RET, ref, 0, TYPE_NONE);
+    emit_instr(f, OP_RET, ref, 0, 0);
     curr_block_info->is_filled = true;
 }
 
@@ -341,11 +341,11 @@ static Type get_unop_result_type(UnaryOp unop, Type arg) {
     if (unop == UNOP_NOT) { assert(arg == TYPE_BOOL); return arg; }
     if (unop == UNOP_BNOT) { assert(TYPE_IS_INT(arg)); return arg; }
     assert(0 && "illegal unop");
-    return TYPE_NONE;
+    return 0;
 }
 Value emit_unop(Func *f, UnaryOp unop, Value ref) {
     Type result_type = get_unop_result_type(unop, f->value_types[ref]);
-    assert(result_type != TYPE_NONE);
+    assert(result_type);
     if (VALUE_IS_STATIC(ref)) {
         Type type = f->value_types[ref];
         const TypeInfo *type_info = get_type_info(type);
@@ -441,13 +441,13 @@ static Type get_binop_result_type(OpCode binop, Type left, Type right) {
     if (OP_IS_INT_BINOP(binop)) { assert(TYPE_IS_INT(left)); return left; }
     if (OP_IS_NUM_BINOP(binop)) { assert(TYPE_IS_NUM(left)); return left; }
     assert(0 && "illegal binop");
-    return TYPE_NONE;
+    return 0;
 }
 Value emit_binop(Func *f, OpCode binop, Value left, Value right) {
     Type left_type = f->value_types[left];
     Type right_type = f->value_types[right];
     Type result_type = get_binop_result_type(binop, left_type, right_type);
-    assert(result_type != TYPE_NONE);
+    assert(result_type);
 
     if (VALUE_IS_STATIC(left) && VALUE_IS_STATIC(right)) {
         StaticValue result = {0};
@@ -474,14 +474,14 @@ static void remove_block_param(Func *f, Block block, int index) {
 // check if all jumps to this block pass the same value, and if so remove both the param, and the branch arguments.
 // if the branch arguments are arguments to that block, then apply this function recursively.
 static void try_eliminate_param(Func *f, Block block, int param_index) {
-    Value first_arg = VALUE_NONE;
+    Value first_arg = 0;
     BlockInfo *block_info = &f->blocks[block];
     Block source_block;
     vector_foreach(block_info->sources, source_block) {
         BlockInfo *source_block_info = &f->blocks[source_block];
         int jump_slot = get_jump_slot(source_block_info, block);
         Value arg = source_block_info->args[jump_slot][param_index];
-        if (first_arg == VALUE_NONE) {
+        if (!first_arg) {
             first_arg = arg;
         } else if (arg != first_arg) {
             return;
@@ -497,23 +497,18 @@ static void try_eliminate_param(Func *f, Block block, int param_index) {
 }
 
 void define_symbol(Func *f, Block block, Symbol sym, Value ref) {
-    assert(block != TYPE_NONE);
-    assert(sym != SYMBOL_NONE);
-    assert(ref != VALUE_NONE);
+    assert(block);
+    assert(sym);
+    assert(ref);
     EnvKey key = { .block = block, .sym = sym };
     EnvValue value = { .ref = ref };
     U64ToU64_put(&f->env_key_to_ref, key.u64_repr, value.u64_repr);
 }
 
 static Value add_param_internal(Func *f, Block block, Symbol name, Type type) {
-    assert(block != BLOCK_NONE);
+    assert(block);
     BlockInfo *block_info = &f->blocks[block];
-    if (name == SYMBOL_NONE) { // explicit parameter
-        BlockParam p;
-        vector_foreach(block_info->params, p) {
-            assert(p.name == SYMBOL_NONE && "explicit params must be added first (using add_block_param)");
-        }
-    }
+    assert(name || get_explicit_param_count(block_info) == vector_size(block_info->params)); // explicit (name-less) params must be added first
     Value value = create_value(f, type);
     vector_push(block_info->params, ((BlockParam) {
         .name = name,
@@ -522,13 +517,13 @@ static Value add_param_internal(Func *f, Block block, Symbol name, Type type) {
     return value;
 }
 Value add_block_param(Func *f, Block block, Type type) {
-    assert(type != TYPE_NONE);
-    return add_param_internal(f, block, SYMBOL_NONE, type);
+    assert(type);
+    return add_param_internal(f, block, 0, type);
 }
 
 /*
 static void fixup_jumps_to_block(Func *f, Block block) {
-    assert(block != BLOCK_NONE);
+    assert(block);
     BlockInfo *block_info = &f->blocks[block];
     int param_count = get_param_count(block_info);
     if (param_count == 0) {
@@ -551,7 +546,7 @@ static void fixup_jumps_to_block(Func *f, Block block) {
 */
 
 void seal_block(Func *f, Block block) {
-    assert(block != BLOCK_NONE);
+    assert(block);
     BlockInfo *block_info = &f->blocks[block];
     assert(!block_info->is_sealed);
     block_info->is_sealed = true;
@@ -559,8 +554,8 @@ void seal_block(Func *f, Block block) {
 }
 
 Value lookup_symbol(Func *f, Block block, Symbol sym) {
-    assert(block != SYMBOL_NONE);
-    assert(sym != SYMBOL_NONE);
+    assert(block);
+    assert(sym);
     EnvKey key = { .block = block, .sym = sym };
     EnvValue value;
     if (U64ToU64_get(&f->env_key_to_ref, key.u64_repr, &value.u64_repr)) {
@@ -574,7 +569,7 @@ Value lookup_symbol(Func *f, Block block, Symbol sym) {
         // being sealed means there will not be more source blocks
         if (vector_empty(block_info->sources)) {
             // not found, and this is the entry block. so it doesn't exist.
-            return VALUE_NONE;
+            return 0;
         }
         if (vector_size(block_info->sources) == 1) {
             // trivial case
@@ -586,18 +581,18 @@ Value lookup_symbol(Func *f, Block block, Symbol sym) {
 
     // this is a merge block, so we need to get this value as an argument.
     // add incomplete parameter to avoid infinite recursion (it will get correct type later).
-    Value param = add_param_internal(f, block, sym, TYPE_NONE);
+    Value param = add_param_internal(f, block, sym, 0);
 
     // we fixup the jumps in any blocks already known to target this.
     Block source_block;
     vector_foreach(block_info->sources, source_block) {
         Value ref = lookup_symbol(f, source_block, sym);
-        assert(ref != VALUE_NONE);
+        assert(ref);
         
         // disallow cycles, before there are any known definitions.
         // code generation must ensure definitions are added to the graph before generating uses.
         assert(ref != param);
-        assert(f->value_types[ref] != TYPE_NONE);
+        assert(f->value_types[ref]);
         f->value_types[param] = f->value_types[ref]; // fixup type
 
         // add jump argument

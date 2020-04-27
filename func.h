@@ -2,10 +2,8 @@
 
 #include "ir.h"
 
-typedef int32_t Block;
-#define BLOCK_NONE 0
-
 typedef struct Func Func;
+typedef int32_t Block;
 
 Func *func_new();
 

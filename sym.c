@@ -29,7 +29,7 @@ Symbol symbol_from_slice(Slice name) {
 
         if (symbols_size == 0) {
             Symbol none = symbol_from_str("");
-            assert(none == SYMBOL_NONE);
+            assert(none == 0);
             assert(symbols_size == 1);
         }
     }
