@@ -43,38 +43,5 @@ int main(int argc, char *argv[]) {
         print_errors(&err_ctx);
     }
 
-    /*Func *f = func_new();
-
-    assert(get_static_i32(f, 1) == get_static_i32(f, 1));
-    assert(get_static_i32(f, 1) != get_static_i32(f, 2));
-
-    Block entry_block = create_block(f);
-    Block then_block = create_block(f);
-    Block else_block = create_block(f);
-    Block merge_block = create_block(f);
-
-    set_current_block(f, entry_block);
-    Value one = get_static_i32(f, 1);
-    Value two = get_static_i32(f, 2);
-    Value three = get_static_i32(f, 3);
-    Value sum = emit_binop(f, OP_ADD, one, two);
-    Value cond = emit_binop(f, OP_EQ, sum, three);
-    emit_jfalse(f, cond, else_block);
-    emit_jump(f, then_block);
-
-    set_current_block(f, then_block);
-    Value then_result = get_static_i32(f, 123);
-    emit_jump(f, merge_block);
-    
-    set_current_block(f, else_block);
-    Value else_result = get_static_i32(f, 666);
-    emit_jump(f, merge_block);
-
-    set_current_block(f, merge_block);
-    emit_binop(f, OP_ADD, one, two);
-
-    //postprocess_code(f);
-    print_code(f);*/
-
     return 0;
 }

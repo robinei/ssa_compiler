@@ -81,10 +81,10 @@ static_assert(OPCODE_COUNT <= INSTR_OPCODE_MAX, "not enough bits for all opcodes
 
 typedef union Instr {
     struct {
-        int64_t opcode : INSTR_OPCODE_BITS;
-        int64_t left   : INSTR_OPERAND_BITS;
-        int64_t right  : INSTR_OPERAND_BITS;
-        int64_t result : INSTR_OPERAND_BITS;
+        uint64_t opcode : INSTR_OPCODE_BITS;
+        int64_t  left   : INSTR_OPERAND_BITS;
+        int64_t  right  : INSTR_OPERAND_BITS;
+        int64_t  result : INSTR_OPERAND_BITS;
     };
     uint64_t u64_repr;
 } Instr;
@@ -92,7 +92,7 @@ typedef union Instr {
 
 typedef enum OperandType {
     OPERAND_NONE,
-    OPERAND_REF,
+    OPERAND_VALUE,
     OPERAND_BLOCK,
     OPERAND_UNOP,
     OPERAND_FUNC,
@@ -107,11 +107,4 @@ typedef struct OpCodeInfo {
 extern const OpCodeInfo opcode_info[OPCODE_COUNT];
 
 bool is_result_reusable(OpCode opcode);
-
-typedef int32_t Value;
-#define VALUE_UNIT -1
-#define VALUE_FALSE -2
-#define VALUE_TRUE -3
-
-#define VALUE_IS_STATIC(value) ((value) < 0)
 

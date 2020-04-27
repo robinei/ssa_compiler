@@ -43,14 +43,19 @@ typedef struct BlockInfo {
     BlockParam *params; // (vector)
     Instr *instrs; // vector
 
+    int postorder;
+    Block idom;
+
     bool is_filled : 1;
     bool is_sealed : 1;
+    bool is_visited : 1; // when generating postorder traversal
 } BlockInfo;
 
 
 struct Func {
     StaticValue *static_values;
     Type *value_types;
+    Value *value_renames;
     int static_value_size;
     int static_value_capacity;
     int other_value_size;
@@ -69,7 +74,6 @@ struct Func {
 
 void set_current_block(Func *f, Block block) {
     f->curr_block = block;
-    printf(":%d\n", block);
 }
 
 Block get_current_block(Func *f) {
@@ -78,7 +82,7 @@ Block get_current_block(Func *f) {
 
 Func *func_new() {
     Func *f = calloc(1, sizeof(Func));
-    f->blocks_size = 1; // reserve slot for null-block
+    f->blocks_size = 1; // reserve slot for null Block
     f->blocks_capacity = 128;
     f->blocks = calloc(1, sizeof(BlockInfo) * f->blocks_capacity);
     
@@ -87,14 +91,14 @@ Func *func_new() {
     int total_value_capacity = f->static_value_capacity + f->other_value_capacity;
     f->static_values = (StaticValue *)calloc(1, sizeof(StaticValue) * total_value_capacity) + f->static_value_capacity;
     f->value_types = (Type *)calloc(1, sizeof(Type) * total_value_capacity) + f->static_value_capacity;
+    f->value_renames = (Value *)calloc(1, sizeof(Value) * total_value_capacity) + f->static_value_capacity;
 
-    f->value_types[0] = 0; // null-value
     f->value_types[VALUE_UNIT] = TYPE_UNIT;
     f->value_types[VALUE_FALSE] = TYPE_BOOL;
     f->value_types[VALUE_TRUE] = TYPE_BOOL;
     f->static_values[VALUE_TRUE].b = true;
     f->static_value_size = 3; // reserve slots form UNIT/FALSE/TRUE
-    f->other_value_size = 1; // reserve slot for  null-value
+    f->other_value_size = 1; // reserve slot for null Value
     return f;
 }
 
@@ -105,15 +109,19 @@ static void grow_value_buffers(Func *f, int static_value_capacity, int other_val
 
     StaticValue *static_values = (StaticValue *)calloc(1, sizeof(StaticValue) * total_capacity) + static_value_capacity;
     Type *value_types = (Type *)calloc(1, sizeof(Type) * total_capacity) + static_value_capacity;
+    Value *value_renames = (Value *)calloc(1, sizeof(Value) * total_capacity) + static_value_capacity;
 
     memcpy(static_values - static_size, f->static_values - static_size, total_size);
     memcpy(value_types - static_size, f->value_types - static_size, total_size);
+    memcpy(value_renames - static_size, f->value_renames - static_size, total_size);
 
     free(f->static_values - f->static_value_capacity);
     free(f->value_types - f->static_value_capacity);
+    free(f->value_renames - f->static_value_capacity);
 
     f->static_values = static_values;
     f->value_types = value_types;
+    f->value_renames = value_renames;
     f->static_value_capacity = static_value_capacity;
     f->other_value_capacity = other_value_capacity;
 }
@@ -127,6 +135,7 @@ Block create_block(Func *f) {
     assert(block); // always non-zero
     BlockInfo *block_info = &f->blocks[block];
     memset(block_info, 0, sizeof(BlockInfo));
+    block_info->postorder = -1;
     return block;
 }
 
@@ -174,6 +183,7 @@ static Value create_value(Func *f, Type type) {
 }
 
 static Value emit_instr(Func *f, OpCode opcode, int32_t left, int32_t right, Type type) {
+    assert(f->curr_block);
     BlockInfo *curr_block_info = &f->blocks[f->curr_block];
     assert(opcode <= INSTR_OPCODE_MAX);
     assert(left <= INSTR_OPERAND_MAX);
@@ -188,8 +198,11 @@ static Value emit_instr(Func *f, OpCode opcode, int32_t left, int32_t right, Typ
         .right = right,
         .result = result,
     };
-    vector_push(curr_block_info->instrs, instr);
+    if (vector_empty(curr_block_info->instrs)) {
+        printf(":%d\n", f->curr_block);
+    }
     print_instr(f, f->curr_block, instr);
+    vector_push(curr_block_info->instrs, instr);
     return result;
 }
 
@@ -244,10 +257,12 @@ static void add_jump_args(Func *f, BlockInfo *target_block_info, BlockInfo *sour
         assert(args[i]);
         vector_push(source_block_info->args[jump_slot], args[i]);
     }
-    for (int i = arg_count; i < vector_size(target_block_info->params); ++i) {
+    int param_count = vector_size(target_block_info->params);
+    for (int i = arg_count; i < param_count; ++i) {
         Value value = lookup_symbol(f, f->curr_block, target_block_info->params[i].name);
         vector_push(source_block_info->args[jump_slot], value);
     }
+    assert(vector_size(source_block_info->args[jump_slot]) == param_count);
 }
 void emit_jump_with_args(Func *f, Block target, int arg_count, Value *args) {
     assert(f->curr_block);
@@ -466,36 +481,6 @@ Value emit_binop(Func *f, OpCode binop, Value left, Value right) {
 
 
 
-
-static void remove_block_param(Func *f, Block block, int index) {
-
-}
-
-// check if all jumps to this block pass the same value, and if so remove both the param, and the branch arguments.
-// if the branch arguments are arguments to that block, then apply this function recursively.
-static void try_eliminate_param(Func *f, Block block, int param_index) {
-    Value first_arg = 0;
-    BlockInfo *block_info = &f->blocks[block];
-    Block source_block;
-    vector_foreach(block_info->sources, source_block) {
-        BlockInfo *source_block_info = &f->blocks[source_block];
-        int jump_slot = get_jump_slot(source_block_info, block);
-        Value arg = source_block_info->args[jump_slot][param_index];
-        if (!first_arg) {
-            first_arg = arg;
-        } else if (arg != first_arg) {
-            return;
-        }
-    }
-    remove_block_param(f, block, param_index);
-    vector_foreach(block_info->sources, source_block) {
-        BlockInfo *source_block_info = &f->blocks[source_block];
-        int jump_slot = get_jump_slot(source_block_info, block);
-        vector_erase(source_block_info->args[jump_slot], param_index);
-        //try_eliminate_param(f, source_block, )
-    }
-}
-
 void define_symbol(Func *f, Block block, Symbol sym, Value value) {
     assert(block);
     assert(sym);
@@ -514,6 +499,9 @@ static Value add_param_internal(Func *f, Block block, Symbol name, Type type) {
         .name = name,
         .value = value,
     }));
+    if (name) {
+        define_symbol(f, block, name, value);
+    }
     return value;
 }
 Value add_block_param(Func *f, Block block, Type type) {
@@ -521,36 +509,11 @@ Value add_block_param(Func *f, Block block, Type type) {
     return add_param_internal(f, block, 0, type);
 }
 
-/*
-static void fixup_jumps_to_block(Func *f, Block block) {
-    assert(block);
-    BlockInfo *block_info = &f->blocks[block];
-    int param_count = get_param_count(block_info);
-    if (param_count == 0) {
-        return;
-    }
-
-    FOREACH_SOURCE(source_block, block) {
-        Instr *jump_instr = &f->instrs[find_jump(f, source_block, block)];
-        int arg_count = get_arg_count(f, jump_instr->extra);
-        assert(arg_count <= param_count);
-        int missing_count = param_count - arg_count;
-
-        for (int i = missing_count - 1; i <= 0; --i) {
-            Symbol sym = get_param_symbol(block, i);
-            Value value = lookup_symbol(f, source_block, sym);
-            jump_instr->extra = create_block_arg(f, value, jump_instr->extra);
-        }
-    }
-}
-*/
-
 void seal_block(Func *f, Block block) {
     assert(block);
     BlockInfo *block_info = &f->blocks[block];
     assert(!block_info->is_sealed);
     block_info->is_sealed = true;
-    //fixup_jumps_to_block(f, block);
 }
 
 Value lookup_symbol(Func *f, Block block, Symbol sym) {
@@ -577,8 +540,6 @@ Value lookup_symbol(Func *f, Block block, Symbol sym) {
         }
     }
 
-    int prev_param_count = vector_size(block_info->params);
-
     // this is a merge block, so we need to get this value as an argument.
     // add incomplete parameter to avoid infinite recursion (it will get correct type later).
     Value param = add_param_internal(f, block, sym, 0);
@@ -598,13 +559,195 @@ Value lookup_symbol(Func *f, Block block, Symbol sym) {
         // add jump argument
         BlockInfo *source_block_info = &f->blocks[source_block];
         int jump_slot = get_jump_slot(source_block_info, block);
-        assert(prev_param_count == vector_size(source_block_info->args[jump_slot]));
         vector_push(source_block_info->args[jump_slot], value);
+        assert(vector_size(block_info->params) == vector_size(source_block_info->args[jump_slot]));
     }
 
-    //try_eliminate_param(f, block, 0);
     return param;
 }
+
+
+
+
+
+
+static void generate_postorder(BlockInfo *blocks, Block block, Block **result) {
+    if (block) {
+        BlockInfo *block_info = &blocks[block];
+        if (!block_info->is_visited) {
+            block_info->is_visited = true;
+            generate_postorder(blocks, block_info->targets[0], result);
+            generate_postorder(blocks, block_info->targets[1], result);
+            block_info->postorder = vector_size(*result);
+            vector_push(*result, block);
+        }
+    }
+}
+static void generate_dominator_tree(Func *f) {
+    BlockInfo *blocks = f->blocks;
+    Block *postorder = NULL;
+    generate_postorder(blocks, 1, &postorder);
+
+    int postorder_size = vector_size(postorder);
+    Block *doms = calloc(1, sizeof(Block) * postorder_size);
+    for (int i = 0; i < postorder_size; ++i) {
+        doms[i] = -1;
+    }
+    
+    doms[blocks[1].postorder] = blocks[1].postorder;
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (int b = postorder_size - 1; b >= 0; --b) {
+            Block block = postorder[b];
+            if (block == 1) {
+                continue; // start node
+            }
+            int idom = -1;
+            Block *sources = blocks[block].sources;
+            Block source;
+            vector_foreach(sources, source) {
+                int p = blocks[source].postorder;
+                if (doms[p] < 0) {
+                    continue;
+                }
+                if (idom < 0) {
+                    idom = p;
+                } else {
+                    Block f1 = p;
+                    Block f2 = idom;
+                    while (f1 != f2) {
+                        while (f1 < f2) {
+                            f1 = doms[f1];
+                        }
+                        while (f2 < f1) {
+                            f2 = doms[f2];
+                        }
+                    }
+                    idom = f1;
+                }
+            }
+            if (idom != doms[b]) {
+                doms[b] = idom;
+                changed = true;
+            }
+        }
+    }
+    
+    for (int i = 0; i < postorder_size; ++i) {
+        blocks[postorder[i]].idom = postorder[doms[i]];
+    }
+    blocks[1].idom = 0;
+
+    free(doms);
+    vector_free(postorder);
+}
+
+
+// check if all jumps to this block pass the same value or the param itself (which would be the same value),
+// and if so remove both the param and the branch arguments.
+static bool try_eliminate_param(Func *f, Block block, int param_index) {
+    Value first_arg = 0;
+    BlockInfo *block_info = &f->blocks[block];
+    BlockParam param = block_info->params[param_index];
+    Block source_block;
+    vector_foreach(block_info->sources, source_block) {
+        BlockInfo *source_block_info = &f->blocks[source_block];
+        int jump_slot = get_jump_slot(source_block_info, block);
+        Value arg = source_block_info->args[jump_slot][param_index];
+        if (arg != param.value) {
+            if (!first_arg) {
+                first_arg = arg;
+            } else if (arg != first_arg) {
+                return false;
+            }
+        }
+    }
+    if (first_arg) {
+        f->value_renames[param.value] = first_arg;
+        f->value_types[param.value] = f->value_types[first_arg];
+        vector_erase(block_info->params, param_index);
+        vector_foreach(block_info->sources, source_block) {
+            BlockInfo *source_block_info = &f->blocks[source_block];
+            int jump_slot = get_jump_slot(source_block_info, block);
+            vector_erase(source_block_info->args[jump_slot], param_index);
+        }
+        return true;
+    }
+    return false;
+}
+static bool apply_arg_renames(Func *f, Value *args) {
+    int arg_count = vector_size(args);
+    bool changed = false;
+    for (int i = 0; i < arg_count; ++i) {
+        if (f->value_renames[args[i]]) {
+            args[i] = f->value_renames[args[i]];
+            changed = true;
+        }
+    }
+    return changed;
+}
+static bool apply_operand_renames(Func *f, Instr *instrs) {
+    int instr_count = vector_size(instrs);
+    bool changed = false;
+    for (int i = 0; i < instr_count; ++i) {
+        Instr *instr = instrs + i;
+        OpCodeInfo opinfo = opcode_info[instr->opcode];
+        if (opinfo.left == OPERAND_VALUE && f->value_renames[instr->left]) {
+            instr->left = f->value_renames[instr->left];
+            changed = true;
+        }
+        if (opinfo.right == OPERAND_VALUE && f->value_renames[instr->right]) {
+            instr->right = f->value_renames[instr->right];
+            changed = true;
+        }
+    }
+    return changed;
+}
+void postprocess_code(Func *f) {
+    generate_dominator_tree(f);
+
+    bool changed;
+    do {
+        changed = false;
+        for (int block = 1; block < f->blocks_size; ++block) {
+            BlockInfo *block_info = &f->blocks[block];
+            assert(block_info->is_sealed);
+            assert(block_info->is_filled);
+            int param_count = vector_size(block_info->params);
+            for (int i = 0; i < param_count; ++i) {
+                if (try_eliminate_param(f, block, i)) {
+                    changed = true;
+                    --i; // compensate for removed param
+                }
+            }
+        }
+        for (int block = 1; block < f->blocks_size; ++block) {
+            BlockInfo *block_info = &f->blocks[block];
+            if (apply_arg_renames(f, block_info->args[0])) {
+                changed = true;
+            }
+            if (apply_arg_renames(f, block_info->args[1])) {
+                changed = true;
+            }
+            if (apply_operand_renames(f, block_info->instrs)) {
+                changed = true;
+            }
+        }
+    } while (changed);
+    
+    for (int block = 1; block < f->blocks_size; ++block) {
+        BlockInfo *block_info = &f->blocks[block];
+        if (vector_size(block_info->instrs) == 1) {
+            if (block_info->instrs[0].opcode == OP_JUMP) {
+
+            } else if (block_info->instrs[0].opcode == OP_RET) {
+
+            }
+        }
+    }
+}
+
 
 
 
@@ -647,7 +790,7 @@ static void print_operand(Func *f, OperandType operand_type, int32_t operand) {
     switch (operand_type) {
     case OPERAND_NONE:
         break;
-    case OPERAND_REF:
+    case OPERAND_VALUE:
         putchar(' ');
         print_value_operand(f, operand);
         break;
@@ -684,10 +827,10 @@ static const char *get_type_suffix(Func *f, Instr instr) {
         return "";
     }
     const OpCodeInfo *opinfo = &opcode_info[instr.opcode];
-    if (opinfo->left == OPERAND_REF) {
+    if (opinfo->left == OPERAND_VALUE) {
         return get_type_suffix_for_type(f->value_types[instr.left]);
     }
-    if (opinfo->right == OPERAND_REF) {
+    if (opinfo->right == OPERAND_VALUE) {
         return get_type_suffix_for_type(f->value_types[instr.right]);
     }
     return "";
@@ -720,14 +863,16 @@ static void print_jump_args(Func *f, Block from_block, Block to_block) {
     BlockInfo *from_block_info = &f->blocks[from_block];
     int jump_slot = get_jump_slot(from_block_info, to_block);
     bool has_printed = false;
-    for (int i = 0; i < vector_size(from_block_info->args[jump_slot]); ++i) {
+    Value *args = from_block_info->args[jump_slot];
+    int arg_count = vector_size(args);
+    for (int i = 0; i < arg_count; ++i) {
         if (has_printed) {
             printf(", ");
         } else {
             printf(" (");
         }
         has_printed = true;
-        print_value_operand(f, from_block_info->args[jump_slot][i]);
+        print_value_operand(f, args[i]);
     }
     if (has_printed) {
         putchar(')');
@@ -756,10 +901,11 @@ static void print_instr(Func *f, Block block, Instr instr) {
     }
 }
 void print_block_code(Func *f, Block block) {
+    BlockInfo *block_info = &f->blocks[block];
     printf(":%d", block);
     print_params(f, block);
+    printf(" [idom=%d, postorder=%d]", block_info->idom, block_info->postorder);
     putchar('\n');
-    BlockInfo *block_info = &f->blocks[block];
     for (int i = 0; i < vector_size(block_info->instrs); ++i) {
         Instr instr = block_info->instrs[i];
         print_instr(f, block, instr);

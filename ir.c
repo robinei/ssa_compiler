@@ -3,41 +3,41 @@
 const OpCodeInfo opcode_info[OPCODE_COUNT] = {
     [OP_NOP]    = { "nop",      OPERAND_NONE,   OPERAND_NONE },
     [OP_JUMP]   = { "jump",     OPERAND_NONE,   OPERAND_BLOCK },
-    [OP_JFALSE] = { "jfalse",   OPERAND_REF,    OPERAND_BLOCK },
-    [OP_RET]    = { "ret",      OPERAND_REF,    OPERAND_NONE },
-    [OP_COPY]   = { "copy",     OPERAND_REF,    OPERAND_REF },
+    [OP_JFALSE] = { "jfalse",   OPERAND_VALUE,  OPERAND_BLOCK },
+    [OP_RET]    = { "ret",      OPERAND_VALUE,  OPERAND_NONE },
+    [OP_COPY]   = { "copy",     OPERAND_VALUE,  OPERAND_VALUE },
     
-    [OP_SELECT] = { "select",   OPERAND_REF,    OPERAND_REF },
-    [OP_PAIR]   = { "pair",     OPERAND_REF,    OPERAND_REF },
-    [OP_CALL]   = { "call",     OPERAND_FUNC,   OPERAND_REF },
+    [OP_SELECT] = { "select",   OPERAND_VALUE,  OPERAND_VALUE },
+    [OP_PAIR]   = { "pair",     OPERAND_VALUE,  OPERAND_VALUE },
+    [OP_CALL]   = { "call",     OPERAND_FUNC,   OPERAND_VALUE },
 
-    [OP_UNOP]   = { "unop",     OPERAND_UNOP,   OPERAND_REF },
+    [OP_UNOP]   = { "unop",     OPERAND_UNOP,   OPERAND_VALUE },
     
-    [OP_AND]    = { "and",      OPERAND_REF,    OPERAND_REF },
-    [OP_OR]     = { "or",       OPERAND_REF,    OPERAND_REF },
-    [OP_EQ]     = { "eq",       OPERAND_REF,    OPERAND_REF },
-    [OP_NEQ]    = { "neq",      OPERAND_REF,    OPERAND_REF },
-    [OP_LT]     = { "lt",       OPERAND_REF,    OPERAND_REF },
-    [OP_GT]     = { "gt",       OPERAND_REF,    OPERAND_REF },
-    [OP_LTEQ]   = { "lteq",     OPERAND_REF,    OPERAND_REF },
-    [OP_GTEQ]   = { "gteq",     OPERAND_REF,    OPERAND_REF },
+    [OP_AND]    = { "and",      OPERAND_VALUE,  OPERAND_VALUE },
+    [OP_OR]     = { "or",       OPERAND_VALUE,  OPERAND_VALUE },
+    [OP_EQ]     = { "eq",       OPERAND_VALUE,  OPERAND_VALUE },
+    [OP_NEQ]    = { "neq",      OPERAND_VALUE,  OPERAND_VALUE },
+    [OP_LT]     = { "lt",       OPERAND_VALUE,  OPERAND_VALUE },
+    [OP_GT]     = { "gt",       OPERAND_VALUE,  OPERAND_VALUE },
+    [OP_LTEQ]   = { "lteq",     OPERAND_VALUE,  OPERAND_VALUE },
+    [OP_GTEQ]   = { "gteq",     OPERAND_VALUE,  OPERAND_VALUE },
 
-    [OP_ADD]    = { "add",      OPERAND_REF,    OPERAND_REF },
-    [OP_SUB]    = { "sub",      OPERAND_REF,    OPERAND_REF },
-    [OP_MUL]    = { "mul",      OPERAND_REF,    OPERAND_REF },
-    [OP_DIV]    = { "div",      OPERAND_REF,    OPERAND_REF },
-    [OP_MIN]    = { "min",      OPERAND_REF,    OPERAND_REF },
-    [OP_MAX]    = { "max",      OPERAND_REF,    OPERAND_REF },
+    [OP_ADD]    = { "add",      OPERAND_VALUE,  OPERAND_VALUE },
+    [OP_SUB]    = { "sub",      OPERAND_VALUE,  OPERAND_VALUE },
+    [OP_MUL]    = { "mul",      OPERAND_VALUE,  OPERAND_VALUE },
+    [OP_DIV]    = { "div",      OPERAND_VALUE,  OPERAND_VALUE },
+    [OP_MIN]    = { "min",      OPERAND_VALUE,  OPERAND_VALUE },
+    [OP_MAX]    = { "max",      OPERAND_VALUE,  OPERAND_VALUE },
     
-    [OP_POW]    = { "pow",      OPERAND_REF,    OPERAND_REF },
+    [OP_POW]    = { "pow",      OPERAND_VALUE,  OPERAND_VALUE },
 
-    [OP_MOD]    = { "mod",      OPERAND_REF,     OPERAND_REF },
+    [OP_MOD]    = { "mod",      OPERAND_VALUE,  OPERAND_VALUE },
     
-    [OP_BAND]   = { "band",     OPERAND_REF,    OPERAND_REF },
-    [OP_BOR]    = { "bor",      OPERAND_REF,    OPERAND_REF },
-    [OP_BXOR]   = { "bxor",     OPERAND_REF,    OPERAND_REF },
-    [OP_BSHL]   = { "bshl",     OPERAND_REF,    OPERAND_REF },
-    [OP_BSHR]   = { "bshr",     OPERAND_REF,    OPERAND_REF },
+    [OP_BAND]   = { "band",     OPERAND_VALUE,  OPERAND_VALUE },
+    [OP_BOR]    = { "bor",      OPERAND_VALUE,  OPERAND_VALUE },
+    [OP_BXOR]   = { "bxor",     OPERAND_VALUE,  OPERAND_VALUE },
+    [OP_BSHL]   = { "bshl",     OPERAND_VALUE,  OPERAND_VALUE },
+    [OP_BSHR]   = { "bshr",     OPERAND_VALUE,  OPERAND_VALUE },
 };
 
 
@@ -46,7 +46,7 @@ bool is_result_reusable(OpCode opcode) {
         return false;
     }
     const OpCodeInfo *opinfo = &opcode_info[opcode];
-    return (opinfo->left == OPERAND_REF && opinfo->right == OPERAND_REF)
-        || (opinfo->left == OPERAND_NONE && opinfo->right == OPERAND_REF)
-        || (opinfo->left == OPERAND_REF && opinfo->right == OPERAND_NONE);
+    return (opinfo->left == OPERAND_VALUE && opinfo->right == OPERAND_VALUE)
+        || (opinfo->left == OPERAND_NONE && opinfo->right == OPERAND_VALUE)
+        || (opinfo->left == OPERAND_VALUE && opinfo->right == OPERAND_NONE);
 }

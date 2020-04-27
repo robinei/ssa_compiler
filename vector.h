@@ -10,10 +10,10 @@
 #define vector_size(V) ((V) ? _vector__size(V) : 0)
 #define vector_capacity(V) ((V) ? _vector__capacity(V) : 0)
 
-#define vector_empty(V) (!vector_size(V))
-#define vector_last(V) ((V)[vector_size(V) - 1])
+#define vector_empty(V) (!(V) || !_vector__size(V))
+#define vector_last(V) ((V)[_vector__size(V) - 1])
 
-#define vector_pop(V) ((V)[--vector_size(V)])
+#define vector_pop(V) ((V)[--_vector__size(V)])
 #define vector_push(V, X) \
     do { \
         if ((V) && _vector__size(V) < _vector__capacity(V)) { \
@@ -21,9 +21,9 @@
         } else { \
             if (V) { \
                 _vector__capacity(V) *= 2; \
-                (V) = (void *)((int *)realloc((int *)(V) - 2, sizeof(int)*2 + sizeof((V)[0])*_vector__capacity(V)) + 2); \
+                (V) = (void *)((int *)realloc((int *)(V) - 2, sizeof(int)*2 + sizeof(*(V))*_vector__capacity(V)) + 2); \
             } else { \
-                (V) = (void *)((int *)malloc(sizeof(int)*2 + sizeof((V)[0])*VECTOR_INITIAL_CAPACITY) + 2); \
+                (V) = (void *)((int *)malloc(sizeof(int)*2 + sizeof(*(V))*VECTOR_INITIAL_CAPACITY) + 2); \
                 _vector__capacity(V) = VECTOR_INITIAL_CAPACITY; \
                 _vector__size(V) = 0; \
             } \
@@ -34,9 +34,11 @@
 #define vector_erase(V, I) \
     do { \
         if (V) { \
-            memcpy((V) + (I), (V) + (I) + 1, --_vector__size(V) - (I)); \
+            memcpy((V) + (I), (V) + (I) + 1, (--_vector__size(V) - (I)) * sizeof(*(V))); \
         } \
     } while (0)
 
 #define vector_foreach(V, X) \
-    for (int __index = 0, __max_index = vector_size(V); __index < __max_index && ((X) = (V)[__index], true); ++__index)
+    for (int __index = 0, __max_index = vector_size(V); \
+         __index < __max_index && ((X) = (V)[__index], 1); \
+         ++__index)

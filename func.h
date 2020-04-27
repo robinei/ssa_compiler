@@ -4,6 +4,12 @@
 
 typedef struct Func Func;
 typedef int32_t Block;
+typedef int32_t Value;
+
+#define VALUE_UNIT -1
+#define VALUE_FALSE -2
+#define VALUE_TRUE -3
+#define VALUE_IS_STATIC(value) ((value) < 0)
 
 Func *func_new();
 
@@ -41,4 +47,5 @@ void emit_jfalse_with_args(Func *f, Value cond, Block target, int arg_count, Val
 void define_symbol(Func *f, Block block, Symbol sym, Value value);
 Value lookup_symbol(Func *f, Block block, Symbol sym);
 
+void postprocess_code(Func *f);
 void print_code(Func *f);

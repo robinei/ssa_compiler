@@ -566,10 +566,10 @@ static ParseResult parse_while(ParseCtx *ctx, char *start) {
         set_current_block(ctx->func, body_block);
     }
     char *body_start = ctx->ptr;
-    expect_keyword(ctx, "do", "after 'if' condition");
+    expect_keyword(ctx, "do", "after 'while' condition");
     int body_indent = ctx->current_indent;
     ParseResult body_result = parse_expr_seq_in_new_env(ctx, body_start);
-    CHECK_TYPE(body_result, body_result.type == TYPE_UNIT, "expects loop body to have type Unit");
+    CHECK_TYPE(body_result, body_result.type == TYPE_UNIT, "expects 'while' body to have type Unit");
     ctx->skip_newline = prev_skip_newline;
     if (ctx->current_indent > body_indent) {
         PARSE_ERR_HERE("unexpected indentation");
@@ -941,6 +941,8 @@ bool parse_module(ParseCtx *ctx, Slice source_text) {
     ctx->env[0] = (EnvEntry) { .sym = 0, .type = 0 };
 
     Block entry_block = create_block(ctx->func);
+    assert(entry_block == 1);
+    seal_block(ctx->func, entry_block);
     Value param = add_block_param(ctx->func, entry_block, TYPE_I32);
     set_current_block(ctx->func, entry_block);
     push_env(ctx, symbol_from_str("x"), TYPE_I32, param, true);
@@ -956,6 +958,7 @@ bool parse_module(ParseCtx *ctx, Slice source_text) {
     emit_ret(ctx->func, result.value);
     
     printf("\nFinished code:\n");
+    postprocess_code(ctx->func);
     print_code(ctx->func);
     ctx->func = prev_func;
     return true;
