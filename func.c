@@ -17,7 +17,7 @@ typedef union EnvKey {
 } EnvKey;
 
 typedef union EnvValue {
-    Value ref;
+    Value value;
     uint64_t u64_repr;
 } EnvValue;
 
@@ -63,7 +63,7 @@ struct Func {
 
     HashedU32ToI32 static_value_hash_to_value;
 
-    U64ToU64 env_key_to_ref;
+    U64ToU64 env_key_to_value;
 };
 
 
@@ -209,14 +209,14 @@ Value get_static_f64 (Func *f, double v)   { return get_static_value(f, TYPE_F64
 Value emit_pair(Func *f, Value left, Value right) {
     return emit_instr(f, OP_PAIR, left, right, TYPE_PAIR);
 }
-static Value emit_create_ref_list(Func *f, int count, const Value *refs) {
+static Value emit_create_value_list(Func *f, int count, const Value *values) {
     assert(count > 0);
     if (count == 1) {
-        return refs[0];
+        return values[0];
     }
-    Value result = emit_pair(f, refs[count - 2], refs[count - 1]);
+    Value result = emit_pair(f, values[count - 2], values[count - 1]);
     for (int i = count - 2; i > 0; --i) {
-        result = emit_pair(f, refs[i - 1], result);
+        result = emit_pair(f, values[i - 1], result);
     }
     return result;
 }
@@ -299,13 +299,13 @@ Value emit_select(Func *f, Value cond, Value if_true, Value if_false) {
     return emit_instr(f, OP_SELECT, cond, emit_pair(f, if_true, if_false), type);
 }
 
-void emit_ret(Func *f, Value ref) {
+void emit_ret(Func *f, Value value) {
     BlockInfo *curr_block_info = &f->blocks[f->curr_block];
     if (curr_block_info->is_filled) {
         // if RET follows a JFALSE that specialized into a JUMP, then we'll already be finished
         return;
     }
-    emit_instr(f, OP_RET, ref, 0, 0);
+    emit_instr(f, OP_RET, value, 0, 0);
     curr_block_info->is_filled = true;
 }
 
@@ -343,23 +343,23 @@ static Type get_unop_result_type(UnaryOp unop, Type arg) {
     assert(0 && "illegal unop");
     return 0;
 }
-Value emit_unop(Func *f, UnaryOp unop, Value ref) {
-    Type result_type = get_unop_result_type(unop, f->value_types[ref]);
+Value emit_unop(Func *f, UnaryOp unop, Value value) {
+    Type result_type = get_unop_result_type(unop, f->value_types[value]);
     assert(result_type);
-    if (VALUE_IS_STATIC(ref)) {
-        Type type = f->value_types[ref];
+    if (VALUE_IS_STATIC(value)) {
+        Type type = f->value_types[value];
         const TypeInfo *type_info = get_type_info(type);
         StaticValue result = {0};
         switch (type_info->kind) {
-        case TK_BOOL: perform_static_bool_unop(unop, &f->static_values[ref], &result); break;
-        case TK_INT:  perform_static_int_unop(unop, &f->static_values[ref], &result); break;
-        case TK_UINT: perform_static_uint_unop(unop, &f->static_values[ref], &result); break;
-        case TK_REAL: perform_static_real_unop(unop, &f->static_values[ref], &result); break;
+        case TK_BOOL: perform_static_bool_unop(unop, &f->static_values[value], &result); break;
+        case TK_INT:  perform_static_int_unop(unop, &f->static_values[value], &result); break;
+        case TK_UINT: perform_static_uint_unop(unop, &f->static_values[value], &result); break;
+        case TK_REAL: perform_static_real_unop(unop, &f->static_values[value], &result); break;
         default: assert(0 && "not implemented for type"); break;
         }
         return get_static_value(f, type, result);
     }
-    return emit_instr(f, OP_UNOP, unop, ref, result_type);
+    return emit_instr(f, OP_UNOP, unop, value, result_type);
 }
 
 static void perform_static_bool_binop(OpCode binop, StaticValue *left, StaticValue *right, StaticValue *result) {
@@ -496,13 +496,13 @@ static void try_eliminate_param(Func *f, Block block, int param_index) {
     }
 }
 
-void define_symbol(Func *f, Block block, Symbol sym, Value ref) {
+void define_symbol(Func *f, Block block, Symbol sym, Value value) {
     assert(block);
     assert(sym);
-    assert(ref);
-    EnvKey key = { .block = block, .sym = sym };
-    EnvValue value = { .ref = ref };
-    U64ToU64_put(&f->env_key_to_ref, key.u64_repr, value.u64_repr);
+    assert(value);
+    EnvKey env_key = { .block = block, .sym = sym };
+    EnvValue env_value = { .value = value };
+    U64ToU64_put(&f->env_key_to_value, env_key.u64_repr, env_value.u64_repr);
 }
 
 static Value add_param_internal(Func *f, Block block, Symbol name, Type type) {
@@ -538,8 +538,8 @@ static void fixup_jumps_to_block(Func *f, Block block) {
 
         for (int i = missing_count - 1; i <= 0; --i) {
             Symbol sym = get_param_symbol(block, i);
-            Value ref = lookup_symbol(f, source_block, sym);
-            jump_instr->extra = create_block_arg(f, ref, jump_instr->extra);
+            Value value = lookup_symbol(f, source_block, sym);
+            jump_instr->extra = create_block_arg(f, value, jump_instr->extra);
         }
     }
 }
@@ -556,10 +556,10 @@ void seal_block(Func *f, Block block) {
 Value lookup_symbol(Func *f, Block block, Symbol sym) {
     assert(block);
     assert(sym);
-    EnvKey key = { .block = block, .sym = sym };
-    EnvValue value;
-    if (U64ToU64_get(&f->env_key_to_ref, key.u64_repr, &value.u64_repr)) {
-        return value.ref;
+    EnvKey env_key = { .block = block, .sym = sym };
+    EnvValue env_value;
+    if (U64ToU64_get(&f->env_key_to_value, env_key.u64_repr, &env_value.u64_repr)) {
+        return env_value.value;
     }
 
     // not found in this block. must recurse to source blocks.
@@ -586,20 +586,20 @@ Value lookup_symbol(Func *f, Block block, Symbol sym) {
     // we fixup the jumps in any blocks already known to target this.
     Block source_block;
     vector_foreach(block_info->sources, source_block) {
-        Value ref = lookup_symbol(f, source_block, sym);
-        assert(ref);
+        Value value = lookup_symbol(f, source_block, sym);
+        assert(value);
         
         // disallow cycles, before there are any known definitions.
         // code generation must ensure definitions are added to the graph before generating uses.
-        assert(ref != param);
-        assert(f->value_types[ref]);
-        f->value_types[param] = f->value_types[ref]; // fixup type
+        assert(value != param);
+        assert(f->value_types[value]);
+        f->value_types[param] = f->value_types[value]; // fixup type
 
         // add jump argument
         BlockInfo *source_block_info = &f->blocks[source_block];
         int jump_slot = get_jump_slot(source_block_info, block);
         assert(prev_param_count == vector_size(source_block_info->args[jump_slot]));
-        vector_push(source_block_info->args[jump_slot], ref);
+        vector_push(source_block_info->args[jump_slot], value);
     }
 
     //try_eliminate_param(f, block, 0);
@@ -611,10 +611,10 @@ Value lookup_symbol(Func *f, Block block, Symbol sym) {
 
 
 
-static void print_static_value(Func *f, Value ref) {
-    assert(VALUE_IS_STATIC(ref));
-    StaticValue *static_value = &f->static_values[ref];
-    const TypeInfo *type_info = get_type_info(f->value_types[ref]);
+static void print_static_value(Func *f, Value value) {
+    assert(VALUE_IS_STATIC(value));
+    StaticValue *static_value = &f->static_values[value];
+    const TypeInfo *type_info = get_type_info(f->value_types[value]);
     switch (type_info->kind) {
     case TK_UNIT:
         printf("()");
@@ -632,7 +632,7 @@ static void print_static_value(Func *f, Value ref) {
         printf("<%f>", static_value->f);
         break;
     default:
-        printf("%d", ref);
+        printf("%d", value);
         break;
     }
 }

@@ -29,8 +29,8 @@ Value get_static_f64(Func *f, double v);
 
 Value emit_pair(Func *f, Value left, Value right);
 Value emit_select(Func *f, Value cond, Value if_true, Value if_false);
-void emit_ret(Func *f, Value ref);
-Value emit_unop(Func *f, UnaryOp unop, Value ref);
+void emit_ret(Func *f, Value value);
+Value emit_unop(Func *f, UnaryOp unop, Value value);
 Value emit_binop(Func *f, OpCode binop, Value left, Value right);
 
 void emit_jump(Func *f, Block target);
@@ -38,7 +38,7 @@ void emit_jfalse(Func *f, Value cond, Block target);
 void emit_jump_with_args(Func *f, Block target, int arg_count, Value *args);
 void emit_jfalse_with_args(Func *f, Value cond, Block target, int arg_count, Value *args);
 
-void define_symbol(Func *f, Block block, Symbol sym, Value ref);
+void define_symbol(Func *f, Block block, Symbol sym, Value value);
 Value lookup_symbol(Func *f, Block block, Symbol sym);
 
 void print_code(Func *f);
