@@ -2,10 +2,8 @@
 
 #include "type.h"
 
-typedef enum {
+typedef enum OpCode {
     OP_NOP,     // does nothing. useful for removing instructions without moving any. stripped before the end.
-    OP_BLOCK,   // right is block id. marks the start of a block.
-    OP_SLOC,    // source location. left is row, right is column.
     OP_JUMP,    // right is target block id. jumps unconditionally.
     OP_JFALSE,  // left is condition, right is target block id. jumps if condition is false.
     OP_RET,     // left is return value. return from current function.
@@ -15,12 +13,10 @@ typedef enum {
     
     OP_SELECT,  // left is bool condition; right is PAIR to choose from (true -> pair.left, false -> pair.right).
 
-    // create a pair of the arguments. used to chain arguments to CALL and PHI instructions in a linked list.
+    // create a pair of the arguments. used to chain arguments to CALL instruction in a linked list.
     OP_PAIR,
     
     OP_CALL,    // left is function id. right is a single argument or an argument list: pair(a, pair(b, c)) etc.
-
-    OP_PARAM,   // left param symbol. right is next param. no-op used to chain arguments.
 
     // unary operators take an UnaryOp operator in left, and a single operand in right, and output the same type.
     OP_UNOP,
@@ -59,7 +55,7 @@ typedef enum {
     OPCODE_COUNT
 } OpCode;
 
-typedef enum {
+typedef enum UnaryOp {
     UNOP_NEG,   // num  -> num
     UNOP_NOT,   // bool -> bool
     UNOP_BNOT,  // int  -> int
@@ -83,28 +79,26 @@ typedef enum {
 
 static_assert(OPCODE_COUNT <= INSTR_OPCODE_MAX, "not enough bits for all opcodes");
 
-typedef union {
+typedef union Instr {
     struct {
         int64_t opcode : INSTR_OPCODE_BITS;
         int64_t left   : INSTR_OPERAND_BITS;
         int64_t right  : INSTR_OPERAND_BITS;
+        int64_t result : INSTR_OPERAND_BITS;
     };
     uint64_t u64_repr;
 } Instr;
 
 
-typedef enum {
+typedef enum OperandType {
     OPERAND_NONE,
     OPERAND_REF,
     OPERAND_BLOCK,
-    OPERAND_SYM,
     OPERAND_UNOP,
     OPERAND_FUNC,
-    OPERAND_ROW,
-    OPERAND_COL,
 } OperandType;
 
-typedef struct {
+typedef struct OpCodeInfo {
     const char *name;
     OperandType left;
     OperandType right;
@@ -114,11 +108,11 @@ extern const OpCodeInfo opcode_info[OPCODE_COUNT];
 
 bool is_result_reusable(OpCode opcode);
 
-typedef int32_t IRRef;
-#define IRREF_NONE -1
-#define IRREF_UNIT -2
-#define IRREF_FALSE -3
-#define IRREF_TRUE -4
+typedef int32_t Value;
+#define VALUE_NONE 0
+#define VALUE_UNIT -1
+#define VALUE_FALSE -2
+#define VALUE_TRUE -3
 
-#define IRREF_IS_STATIC(ref) ((ref) < 0)
+#define VALUE_IS_STATIC(value) ((value) < 0)
 

@@ -2,8 +2,6 @@
 
 const OpCodeInfo opcode_info[OPCODE_COUNT] = {
     [OP_NOP]    = { "nop",      OPERAND_NONE,   OPERAND_NONE },
-    [OP_BLOCK]  = { "block",    OPERAND_NONE,   OPERAND_BLOCK },
-    [OP_SLOC]   = { "sloc",     OPERAND_ROW,    OPERAND_COL },
     [OP_JUMP]   = { "jump",     OPERAND_NONE,   OPERAND_BLOCK },
     [OP_JFALSE] = { "jfalse",   OPERAND_REF,    OPERAND_BLOCK },
     [OP_RET]    = { "ret",      OPERAND_REF,    OPERAND_NONE },
@@ -12,7 +10,6 @@ const OpCodeInfo opcode_info[OPCODE_COUNT] = {
     [OP_SELECT] = { "select",   OPERAND_REF,    OPERAND_REF },
     [OP_PAIR]   = { "pair",     OPERAND_REF,    OPERAND_REF },
     [OP_CALL]   = { "call",     OPERAND_FUNC,   OPERAND_REF },
-    [OP_PARAM]  = { "param",    OPERAND_SYM,    OPERAND_REF },
 
     [OP_UNOP]   = { "unop",     OPERAND_UNOP,   OPERAND_REF },
     
@@ -45,7 +42,7 @@ const OpCodeInfo opcode_info[OPCODE_COUNT] = {
 
 
 bool is_result_reusable(OpCode opcode) {
-    if (!OP_HAS_RESULT(opcode) || opcode == OP_CALL || opcode == OP_PARAM) {
+    if (!OP_HAS_RESULT(opcode) || opcode == OP_CALL) {
         return false;
     }
     const OpCodeInfo *opinfo = &opcode_info[opcode];

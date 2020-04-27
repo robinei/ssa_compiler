@@ -4,10 +4,10 @@
 //y
 
 if x == 1 then
-    10
+    10 + x
 else
-    20
-10
+    20 + x
+
 
 //var y = 10
 //if x == 1 then
